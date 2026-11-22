@@ -104,6 +104,19 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
 
     fun cancelGithubLogin() { loginJob?.cancel(); device.value = null }
 
+    suspend fun connectCodespace(token: String): Result<String> = runCatching {
+        val t = token.trim()
+        val user = com.aura.agent.net.Codespaces.verify(t)
+        store.setCodespace(t, user)
+        a.supabase.pushSecret("codespace_pat", t)
+        user
+    }
+
+    fun removeCodespace() {
+        store.setCodespace("", "")
+        viewModelScope.launch(Dispatchers.IO) { a.supabase.deleteSecret("codespace_pat") }
+    }
+
     fun disconnectGithub() = store.setGithub("", "")
 
     suspend fun fetchModels(p: Provider): Result<List<String>> = runCatching { Llm.listModels(p) }

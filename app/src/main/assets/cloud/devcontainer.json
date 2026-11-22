@@ -1,0 +1,13 @@
+{
+  "name": "Aura Workspace",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {},
+    "ghcr.io/devcontainers/features/python:1": {},
+    "ghcr.io/devcontainers/features/java:1": { "version": "17" }
+  },
+  "forwardPorts": [8787],
+  "portsAttributes": { "8787": { "label": "Aura exec", "onAutoForward": "silent" } },
+  "postCreateCommand": "npm i -g agent-browser @playwright/mcp && (agent-browser install --with-deps || true) && (npx -y playwright install --with-deps chromium || true)",
+  "postStartCommand": "nohup python3 .aura/exec_server.py > /tmp/aura-exec.log 2>&1 &"
+}

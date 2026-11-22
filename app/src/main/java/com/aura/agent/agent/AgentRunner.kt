@@ -46,6 +46,16 @@ class AgentRunner(private val app: App) {
     }
 
     private suspend fun run(chatId: String) {
+        val cloud = app.newCloudSession()
+        try {
+            runInner(chatId, cloud)
+        } finally {
+            // strict auto-shutdown: always stop the user's codespace, also after errors, crashes and user stop
+            cloud.stop()
+        }
+    }
+
+    private suspend fun runInner(chatId: String, cloud: CloudSession) {
         dao.setRunning(chatId, true, Ids.now())
         var failed: String? = null
         var assistantId: String? = null
@@ -57,7 +67,7 @@ class AgentRunner(private val app: App) {
                 val history = dao.messagesOnce(chatId)
                 val pending = pendingCalls(history)
                 if (pending.isNotEmpty()) {
-                    for (c in pending) execTool(chatId, c)
+                    for (c in pending) execTool(chatId, c, cloud)
                     return@repeat
                 }
                 val last = history.lastOrNull() ?: return@repeat
@@ -126,9 +136,9 @@ class AgentRunner(private val app: App) {
         buildJsonObject { put("id", it.id); put("name", it.name); put("args", it.args) }
     }).toString()
 
-    private suspend fun execTool(chatId: String, c: ToolCall) {
+    private suspend fun execTool(chatId: String, c: ToolCall, cloud: CloudSession) {
         status.value = Tools.label(c.name)
-        val result = Tools.execute(store, c.name, c.args)
+        val result = Tools.execute(store, c.name, c.args, cloud, java.io.File(app.filesDir, "cloud_out"))
         dao.upsertMessage(
             MessageEntity(
                 Ids.id(), chatId, "tool", result, Ids.now(),
@@ -224,6 +234,7 @@ You have GitHub tools that act with the user's token. When the user wants an app
 3. For Android apps add .github/workflows/build.yml that builds an APK: checkout, actions/setup-java (temurin 17), gradle/actions/setup-gradle with an explicit gradle-version, run gradle assembleDebug (or assembleRelease with a committed keystore), upload the APK with actions/upload-artifact, and publish it with softprops/action-gh-release (permissions: contents: write). Do not rely on a gradle wrapper jar.
 4. Start it with github_run_workflow (or it runs on push), then github_wait_run. If it fails, read github_run_logs, fix the code, push again and retry until it succeeds.
 5. Finish by giving the user the repository URL and the APK download link from github_latest_release.
+Cloud and browser: for heavy tasks (builds, tests, installs, long scripts) use cloud_exec, which runs in the user's own GitHub Codespace; fetch results with cloud_download. For anything that needs a real browser (open live sites, scrape, fill forms, test a UI, verify a deployed app) use agent_browser (CLI, good default) or playwright_tools and playwright_call (Playwright MCP). Both run headless in the codespace. The codespace is stopped automatically when your task ends, so do not try to stop it. If a cloud tool returns NO_CODESPACE_TOKEN, politely tell the user to add their GitHub Codespace token in Settings first.
 Keep replies short and clear. Use Markdown for code. If a tool returns an ERROR, explain it simply and fix what you can.
 """.trimIndent()
     }

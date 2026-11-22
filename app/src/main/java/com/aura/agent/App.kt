@@ -14,6 +14,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.room.Room
 import com.aura.agent.agent.AgentRunner
+import com.aura.agent.agent.CloudSession
 import com.aura.agent.data.AppDb
 import com.aura.agent.data.Store
 import com.aura.agent.net.Llm
@@ -44,6 +45,7 @@ class App : Application() {
         supabase = Supabase(store)
         runner = AgentRunner(this)
         appScope.launch { supabase.loadConfig() }
+        appScope.launch { CloudSession.recover(store, ::codespacePat) }
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CH_RUN, "Background work", NotificationManager.IMPORTANCE_LOW))
         nm.createNotificationChannel(NotificationChannel(CH_DONE, "Finished replies", NotificationManager.IMPORTANCE_DEFAULT))
@@ -57,6 +59,21 @@ class App : Application() {
         val f = java.io.File(filesDir, "last_crash.txt")
         if (f.exists()) f.readText().also { f.delete() } else null
     }.getOrNull()
+
+    /** The signed-in user's Codespace PAT: read from their own Supabase row (RLS), falling back to the local encrypted copy. */
+    suspend fun codespacePat(): String? = supabase.getSecret("codespace_pat")?.takeIf { it.isNotBlank() } ?: store.codespacePat.value.takeIf { it.isNotBlank() }
+
+    private fun workspaceFiles(): Map<String, String> = mapOf(
+        ".devcontainer/devcontainer.json" to assets.open("cloud/devcontainer.json").bufferedReader().readText(),
+        ".aura/exec_server.py" to assets.open("cloud/exec_server.py").bufferedReader().readText(),
+    )
+
+    // overridable so tests can point the cloud client at a mock server
+    var cloudApi = "https://api.github.com"
+    var cloudPortUrl: (String, Int) -> String = { n, p -> "https://$n-$p.app.github.dev" }
+    var cloudPollMs = 5000L
+
+    fun newCloudSession() = CloudSession(store, ::codespacePat, ::workspaceFiles, cloudApi, cloudPortUrl, cloudPollMs)
 
     private val refreshing = AtomicBoolean(false)
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

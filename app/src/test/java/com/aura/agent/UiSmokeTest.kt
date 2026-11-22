@@ -14,14 +14,28 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 
-@RunWith(AndroidJUnit4::class)
-@Config(sdk = [34])
-class UiSmokeTest {
+abstract class UiBase {
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
 
-    private fun vm() = ViewModelProvider(rule.activity)[MainVM::class.java]
-    private fun text(t: String) = rule.onAllNodesWithText(t, substring = true).fetchSemanticsNodes().isNotEmpty()
+    protected fun vm() = ViewModelProvider(rule.activity)[MainVM::class.java]
+    protected fun text(t: String): Boolean {
+        val end = System.currentTimeMillis() + 3000
+        while (true) {
+            org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            rule.waitForIdle()
+            if (rule.onAllNodesWithText(t, substring = true).fetchSemanticsNodes().isNotEmpty()) return true
+            if (System.currentTimeMillis() > end) return false
+            Thread.sleep(50)
+        }
+    }
 
+    protected fun settingsList() = rule.onNode(hasScrollAction() and hasAnyDescendant(hasText("Model providers")))
+
+}
+
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [34])
+class ScreensSmokeTest : UiBase() {
     @Test
     fun screens_render_without_crash() {
         assertTrue("gate", text("Sign in with GitHub"))
@@ -42,7 +56,26 @@ class UiSmokeTest {
         rule.onNodeWithText("model-1").performClick(); rule.waitForIdle()
         assertTrue("picker", text("Choose model"))
     }
+}
 
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [34])
+class SettingsSmokeTest : UiBase() {
+    @Test
+    fun settings_shows_codespace_token_section() {
+        rule.onNodeWithText("Skip for now").performClick(); rule.waitForIdle()
+        rule.runOnUiThread { vm().go(Route.Settings) }; rule.waitForIdle()
+        settingsList().performScrollToNode(hasText("GitHub Codespace Token (PAT)")); rule.waitForIdle()
+        assertTrue("title", text("GitHub Codespace Token (PAT)"))
+        settingsList().performScrollToNode(hasText("Save and verify")); rule.waitForIdle()
+        assertTrue("hint", text("Personal Access Tokens (Classic)") && text("`codespace` aur `repo`"))
+        assertTrue("button", text("Save and verify"))
+    }
+}
+
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [34])
+class SigninSmokeTest : UiBase() {
     @Test
     fun github_signin_button_starts_flow_without_crash() {
         rule.onNodeWithText("Sign in with GitHub").performClick()

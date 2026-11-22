@@ -59,6 +59,18 @@ class Store(ctx: Context) {
     private val _githubClientId = MutableStateFlow(s("githubClientId"))
     val githubClientId = _githubClientId.asStateFlow()
     fun setGithubClientId(v: String) { _githubClientId.value = v.trim(); prefs.edit().putString("githubClientId", v.trim()).apply() }
+    private val _csPat = MutableStateFlow(s("codespacePat"))
+    val codespacePat = _csPat.asStateFlow()
+    private val _csUser = MutableStateFlow(s("codespaceUser"))
+    val codespaceUser = _csUser.asStateFlow()
+    fun setCodespace(pat: String, user: String) {
+        _csPat.value = pat; _csUser.value = user
+        prefs.edit().putString("codespacePat", pat).putString("codespaceUser", user).apply()
+    }
+    /** Name of a codespace this app started and has not stopped yet (crash recovery). */
+    var activeCodespace: String
+        get() = s("activeCodespace"); set(v) { prefs.edit().putString("activeCodespace", v).apply() }
+
     private val _theme = MutableStateFlow(s("theme", "system"))
     val theme = _theme.asStateFlow()
     private val _supaUrl = MutableStateFlow(s("supaUrl", BuildConfig.SUPABASE_URL))

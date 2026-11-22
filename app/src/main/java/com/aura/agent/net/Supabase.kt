@@ -85,6 +85,31 @@ class Supabase(private val store: Store) {
         }, "user_id,name")
     }
 
+    /** Reads one of this user's secrets (RLS limits the rows to the signed-in user). Null if missing or unreachable. */
+    suspend fun getSecret(name: String): String? {
+        if (!enabled()) return null
+        return try {
+            ensureSession()
+            withContext(Dispatchers.IO) {
+                val req = Request.Builder().url(base() + "/rest/v1/user_secrets?name=eq.$name&select=value")
+                    .header("apikey", store.supaKey.value).header("Authorization", "Bearer ${store.supaAccess}").get().build()
+                Http.client.newBuilder().callTimeout(10, java.util.concurrent.TimeUnit.SECONDS).build().newCall(req).execute().use { r ->
+                    if (!r.isSuccessful) return@use null
+                    val arr = AppJsonLenient.parseToJsonElement(r.body?.string().orEmpty()) as? JsonArray
+                    (arr?.firstOrNull() as? JsonObject)?.get("value")?.let { (it as? JsonPrimitive)?.contentOrNull }
+                }
+            }
+        } catch (e: Exception) { null }
+    }
+
+    suspend fun deleteSecret(name: String) = guarded {
+        withContext(Dispatchers.IO) {
+            val req = Request.Builder().url(base() + "/rest/v1/user_secrets?name=eq.$name")
+                .header("apikey", store.supaKey.value).header("Authorization", "Bearer ${store.supaAccess}").delete().build()
+            Http.client.newCall(req).execute().close()
+        }
+    }
+
     /** Reads public app settings (such as the GitHub OAuth Client ID) from the app_config table. */
     suspend fun loadConfig() {
         if (store.supaUrl.value.isBlank() || store.supaKey.value.isBlank()) return

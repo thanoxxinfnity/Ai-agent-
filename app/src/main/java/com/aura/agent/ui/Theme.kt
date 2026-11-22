@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.dp
 class AuraColors(
     val bg: Color, val surface: Color, val text: Color, val dim: Color, val accent: Color,
     val onAccent: Color, val border: Color, val bubble: Color, val code: Color, val danger: Color, val dark: Boolean,
+    val ok: Color = Color(0xFF2E7D32),
 )
 
 val LightAura = AuraColors(
@@ -30,7 +31,7 @@ val LightAura = AuraColors(
 val DarkAura = AuraColors(
     bg = Color(0xFF262624), surface = Color(0xFF30302E), text = Color(0xFFF5F4EE), dim = Color(0xFFA3A19A),
     accent = Color(0xFFD97757), onAccent = Color(0xFF1F1E1D), border = Color(0xFF42413D), bubble = Color(0xFF3A3936),
-    code = Color(0xFF1F1E1D), danger = Color(0xFFF2B8B5), dark = true,
+    code = Color(0xFF1F1E1D), danger = Color(0xFFF2B8B5), dark = true, ok = Color(0xFF81C784),
 )
 
 val LocalAura = staticCompositionLocalOf { LightAura }

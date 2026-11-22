@@ -9,9 +9,9 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 class GhError(val code: Int, msg: String) : Exception(msg)
 
-class GitHub(private val token: String) {
+class GitHub(private val token: String, private val api: String = "https://api.github.com") {
     private fun builder(path: String) = Request.Builder()
-        .url(if (path.startsWith("http")) path else "https://api.github.com$path")
+        .url(if (path.startsWith("http")) path else "$api$path")
         .header("Authorization", "Bearer ${token.trim()}")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
@@ -37,6 +37,18 @@ class GitHub(private val token: String) {
             val t = r.body?.string().orEmpty()
             if (!r.isSuccessful) throw GhError(r.code, "GitHub ${r.code}: ${t.take(200)}")
             t
+        }
+    }
+
+    /** Returns login and the X-OAuth-Scopes header (null for fine-grained tokens). */
+    suspend fun userWithScopes(): Pair<String, String?> = withContext(Dispatchers.IO) {
+        Http.client.newCall(builder("/user").get().build()).execute().use { r ->
+            val t = r.body?.string().orEmpty()
+            if (!r.isSuccessful) {
+                val m = runCatching { (AppJsonLenient.parseToJsonElement(t) as JsonObject)["message"]?.jsonPrimitive?.content }.getOrNull()
+                throw GhError(r.code, if (r.code == 401) "Bad credentials: GitHub rejected this token." else "GitHub ${r.code}: ${m ?: t.take(150)}")
+            }
+            (AppJsonLenient.parseToJsonElement(t) as JsonObject)["login"]!!.jsonPrimitive.content to r.header("X-OAuth-Scopes")
         }
     }
 

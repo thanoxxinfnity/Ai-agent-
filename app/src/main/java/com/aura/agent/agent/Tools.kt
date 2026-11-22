@@ -39,6 +39,39 @@ object Tools {
                 "instructions" to prop("string", "Step by step instructions in Markdown"),
             ),
         ),
+        ToolDef(
+            "cloud_exec",
+            "Run a shell command in the user's own GitHub Codespace (Linux, Node, Python, Java 17 installed). Use it for heavy work: builds, tests, installs, scripts. The codespace starts on first use and is stopped automatically when the task ends.",
+            schema(
+                listOf("command"),
+                "command" to prop("string", "Bash command"),
+                "timeout_seconds" to prop("number", "Max seconds, default 300"),
+                "cwd" to prop("string", "Working directory, default /workspaces/aura-workspace"),
+            ),
+        ),
+        ToolDef(
+            "cloud_upload", "Write a text file inside the codespace.",
+            schema(listOf("path", "content"), "path" to prop("string", "Absolute path in the codespace"), "content" to prop("string", "File content")),
+        ),
+        ToolDef(
+            "cloud_download", "Fetch a file from the codespace onto the phone (saved in the app's cloud_out folder). Small text files are also returned inline.",
+            schema(listOf("path"), "path" to prop("string", "Absolute path in the codespace")),
+        ),
+        ToolDef(
+            "agent_browser",
+            "Drive a real headless browser with the Vercel agent-browser CLI inside the codespace. Pass the CLI arguments, for example: `open https://example.com`, `snapshot -i` (accessibility tree with @refs), `click @e2`, `fill @e3 \"text\"`, `get text @e1`, `screenshot /tmp/a.png`, `close`. Use it to open live sites, fill forms, test UIs and verify deployed apps.",
+            schema(listOf("args"), "args" to prop("string", "Arguments after `agent-browser`")),
+        ),
+        ToolDef("playwright_tools", "List the tools of the Playwright MCP server running headless in the codespace (browser_navigate, browser_snapshot, browser_click ...).", schema(emptyList())),
+        ToolDef(
+            "playwright_call",
+            "Call one Playwright MCP tool in the codespace. Use playwright_tools first to see names and schemas. Good for scraping, form filling, preview testing and web research.",
+            schema(
+                listOf("tool"),
+                "tool" to prop("string", "Tool name, e.g. browser_navigate"),
+                "arguments" to buildJsonObject { put("type", "object"); put("description", "Arguments object for that tool") },
+            ),
+        ),
         ToolDef("github_whoami", "Show the authenticated GitHub user.", schema(emptyList())),
         ToolDef("github_list_repos", "List the user's most recently updated repositories.", schema(emptyList())),
         ToolDef(
@@ -92,7 +125,7 @@ object Tools {
     private fun JsonElement.o() = this as JsonObject
     private fun JsonElement?.s(k: String) = (this as? JsonObject)?.s(k)
 
-    suspend fun execute(store: Store, name: String, argsJson: String): String {
+    suspend fun execute(store: Store, name: String, argsJson: String, cloud: com.aura.agent.agent.CloudSession? = null, outDir: java.io.File? = null): String {
         val a = runCatching { AppJsonLenient.parseToJsonElement(argsJson.ifBlank { "{}" }).o() }.getOrElse { return "ERROR: invalid JSON arguments" }
         if (name == "use_skill") {
             val n = a.s("name").orEmpty()
@@ -108,6 +141,7 @@ object Tools {
             store.upsertSkill(sk)
             return "Skill '${sk.name}' saved. It is now listed under Settings > Skills."
         }
+        if (name in CLOUD_TOOLS) return runCloud(name, a, cloud, outDir)
         val token = store.githubToken.value
         if (token.isBlank()) return "ERROR: No GitHub token. Ask the user to add one in Settings > GitHub."
         val gh = GitHub(token)
@@ -164,6 +198,44 @@ object Tools {
             }
         } catch (e: GhError) {
             "ERROR: ${e.message}"
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            "ERROR: ${e.message ?: e.javaClass.simpleName}"
+        }.take(9000)
+    }
+
+    val CLOUD_TOOLS = setOf("cloud_exec", "cloud_upload", "cloud_download", "agent_browser", "playwright_tools", "playwright_call")
+
+    private suspend fun runCloud(name: String, a: JsonObject, cloud: com.aura.agent.agent.CloudSession?, outDir: java.io.File?): String {
+        cloud ?: return "ERROR: cloud is not available here"
+        return try {
+            val c = cloud.client()
+            when (name) {
+                "cloud_exec" -> c.exec(a.s("command") ?: return "ERROR: command required", (a.n("timeout_seconds") ?: 300L).toInt().coerceIn(5, 1800), a.s("cwd") ?: "/workspaces/aura-workspace").render()
+                "cloud_upload" -> { c.upload(a.s("path") ?: return "ERROR: path required", (a.s("content") ?: "").toByteArray()); "Uploaded ${a.s("path")}" }
+                "cloud_download" -> {
+                    val path = a.s("path") ?: return "ERROR: path required"
+                    val bytes = c.download(path)
+                    val dir = (outDir ?: java.io.File("cloud_out")).also { it.mkdirs() }
+                    val f = java.io.File(dir, path.substringAfterLast('/').ifBlank { "file" })
+                    f.writeBytes(bytes)
+                    val text = runCatching { String(bytes, Charsets.UTF_8).takeIf { b -> bytes.size < 6000 && b.none { it == '\u0000' } } }.getOrNull()
+                    "Saved ${bytes.size} bytes to ${f.absolutePath}" + (text?.let { "\n---\n$it" } ?: "")
+                }
+                "agent_browser" -> {
+                    if (!cloud.browserReady) {
+                        val r = c.exec("command -v agent-browser >/dev/null || (npm i -g agent-browser && agent-browser install --with-deps)", 900)
+                        if (r.exit != 0) return "ERROR: could not install agent-browser\n" + r.render()
+                        cloud.browserReady = true
+                    }
+                    c.exec("agent-browser " + (a.s("args") ?: return "ERROR: args required"), 180).render()
+                }
+                "playwright_tools" -> c.mcpTools()
+                else -> c.mcpCall(a.s("tool") ?: return "ERROR: tool required", (a["arguments"] as? JsonObject) ?: JsonObject(emptyMap()))
+            }
+        } catch (e: com.aura.agent.agent.NoCodespaceToken) {
+            "NO_CODESPACE_TOKEN: the user has not added a GitHub Codespace token. Politely ask them to open Settings > GitHub Codespace Token (PAT) and add one, then try again."
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -228,6 +300,12 @@ object Tools {
 
     /** One-line description for the UI and notifications. */
     fun label(name: String) = when (name) {
+        "cloud_exec" -> "Running in your codespace"
+        "cloud_upload" -> "Uploading to codespace"
+        "cloud_download" -> "Fetching file from codespace"
+        "agent_browser" -> "Browsing with agent-browser"
+        "playwright_tools" -> "Listing browser tools"
+        "playwright_call" -> "Browsing with Playwright"
         "use_skill" -> "Loading skill"
         "create_skill" -> "Saving skill"
         "github_whoami" -> "Checking GitHub account"
