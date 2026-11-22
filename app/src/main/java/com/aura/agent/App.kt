@@ -30,6 +30,15 @@ class App : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            runCatching {
+                java.io.File(filesDir, "last_crash.txt").writeText(
+                    "Thread: ${t.name}\nAndroid ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT}) ${android.os.Build.MODEL}\n\n" + android.util.Log.getStackTraceString(e)
+                )
+            }
+            prev?.uncaughtException(t, e)
+        }
         db = Room.databaseBuilder(this, AppDb::class.java, "aura.db").fallbackToDestructiveMigration().build()
         store = Store(this)
         supabase = Supabase(store)
@@ -43,6 +52,11 @@ class App : Application() {
             override fun onStop(owner: LifecycleOwner) { foreground = false }
         })
     }
+
+    fun takeCrash(): String? = runCatching {
+        val f = java.io.File(filesDir, "last_crash.txt")
+        if (f.exists()) f.readText().also { f.delete() } else null
+    }.getOrNull()
 
     private val refreshing = AtomicBoolean(false)
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

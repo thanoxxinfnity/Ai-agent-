@@ -13,6 +13,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,6 +40,22 @@ import java.util.Calendar
 @Composable
 fun MainScreen(vm: MainVM) {
     val route by vm.route.collectAsState()
+    val ghToken by vm.store.githubToken.collectAsState()
+    var skipped by rememberSaveable { mutableStateOf(false) }
+    val appCtx0 = androidx.compose.ui.platform.LocalContext.current.applicationContext as com.aura.agent.App
+    var crash by remember { mutableStateOf(appCtx0.takeCrash()) }
+    val crashClip = LocalClipboardManager.current
+    crash?.let { report ->
+        AlertDialog(
+            onDismissRequest = { crash = null }, containerColor = A.surface,
+            title = { Text("Aura crashed last time", fontFamily = FontFamily.Serif) },
+            text = {
+                Text(report.take(2500), color = A.dim, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.verticalScroll(rememberScrollState()))
+            },
+            confirmButton = { TextButton({ crashClip.setText(AnnotatedString(report)); crash = null }) { Text("Copy report", color = A.accent) } },
+            dismissButton = { TextButton({ crash = null }) { Text("Close", color = A.dim) } },
+        )
+    }
     var shown by remember { mutableStateOf<Route>(Route.Settings) }
     if (route != Route.Chat) shown = route
     Box(Modifier.fillMaxSize().background(A.bg)) {
@@ -55,6 +72,7 @@ fun MainScreen(vm: MainVM) {
                 }
             }
         }
+        if (ghToken.isBlank() && !skipped) LoginGate(vm) { skipped = true }
     }
     BackHandler0(route != Route.Chat) { vm.go(if (route is Route.Provider) Route.Settings else Route.Chat) }
 }

@@ -63,7 +63,7 @@ fun Field(
 }
 
 @Composable
-fun PillButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, primary: Boolean = true, enabled: Boolean = true, loading: Boolean = false, danger: Boolean = false) {
+fun PillButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, primary: Boolean = true, enabled: Boolean = true, loading: Boolean = false, danger: Boolean = false, icon: Int? = null) {
     val bg = when { !enabled -> A.border; danger -> Color.Transparent; primary -> A.accent; else -> Color.Transparent }
     val fg = when { !enabled -> A.dim; danger -> A.danger; primary -> A.onAccent; else -> A.text }
     Row(
@@ -73,6 +73,7 @@ fun PillButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier,
         horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
     ) {
         if (loading) CircularProgressIndicator(Modifier.size(16.dp), color = fg, strokeWidth = 2.dp).also { Spacer(Modifier.width(8.dp)) }
+        if (icon != null) { AIcon(icon, tint = fg, size = 18.dp); Spacer(Modifier.width(8.dp)) }
         Text(text, color = fg, fontSize = 15.sp, fontWeight = FontWeight.Medium)
     }
 }
@@ -108,18 +109,125 @@ private fun TopBar(title: String, onBack: () -> Unit, trailing: @Composable () -
     }
 }
 
+
+@Composable
+fun GithubSignIn(vm: MainVM) {
+    val token by vm.store.githubToken.collectAsState()
+    val user by vm.store.githubUser.collectAsState()
+    val device by vm.device.collectAsState()
+    val msg by vm.loginMsg.collectAsState()
+    val clientId by vm.store.githubClientId.collectAsState()
+    var custom by remember { mutableStateOf(false) }
+    when {
+        token.isNotBlank() -> Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(A.surface).border(1.dp, A.border, RoundedCornerShape(16.dp)).padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AIcon(R.drawable.ic_github, tint = A.text)
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Signed in", color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                Text(user.ifBlank { "GitHub account" }, color = A.dim, fontSize = 13.sp)
+            }
+            PillButton("Sign out", { vm.disconnectGithub() }, primary = false, danger = true)
+        }
+        device != null -> DeviceCard(vm, device!!)
+        else -> Column {
+            GithubButton { vm.startGithubLogin() }
+            if (msg.isNotBlank()) Text(msg, color = A.danger, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+            Text(
+                if (custom) "Hide custom Client ID" else "Use my own OAuth App", color = A.dim, fontSize = 13.sp,
+                modifier = Modifier.padding(top = 14.dp).clickable { custom = !custom },
+            )
+            if (custom) {
+                Spacer(Modifier.height(8.dp))
+                Field("OAuth App Client ID", clientId, { vm.store.setGithubClientId(it) }, placeholder = "Ov23li...", mono = true)
+            }
+        }
+    }
+}
+
+@Composable
+fun GithubButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Row(
+        modifier.fillMaxWidth().clip(CircleShape).background(A.text).clickable(onClick = onClick).padding(horizontal = 22.dp, vertical = 15.dp),
+        horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AIcon(R.drawable.ic_github, tint = A.bg, size = 22.dp)
+        Spacer(Modifier.width(10.dp))
+        Text("Sign in with GitHub", color = A.bg, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+fun DeviceCard(vm: MainVM, d: com.aura.agent.net.GhOAuth.Device) {
+    val uri = androidx.compose.ui.platform.LocalUriHandler.current
+    val clip = androidx.compose.ui.platform.LocalClipboardManager.current
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(A.surface).border(1.dp, A.border, RoundedCornerShape(18.dp)).padding(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("Enter this code on GitHub", color = A.dim, fontSize = 13.sp)
+        Spacer(Modifier.height(8.dp))
+        Text(d.userCode, color = A.text, fontFamily = FontFamily.Monospace, fontSize = 34.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 4.sp)
+        Spacer(Modifier.height(16.dp))
+        GithubButtonLabel("Copy code and open GitHub") { clip.setText(androidx.compose.ui.text.AnnotatedString(d.userCode)); runCatching { uri.openUri(d.uri) } }
+        Spacer(Modifier.height(14.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(Modifier.size(14.dp), color = A.accent, strokeWidth = 2.dp)
+            Spacer(Modifier.width(8.dp))
+            Text("Waiting for you to approve", color = A.dim, fontSize = 13.sp)
+        }
+        Spacer(Modifier.height(10.dp))
+        Text("Cancel", color = A.dim, fontSize = 14.sp, modifier = Modifier.clip(CircleShape).clickable { vm.cancelGithubLogin() }.padding(horizontal = 14.dp, vertical = 8.dp))
+    }
+}
+
+@Composable
+private fun GithubButtonLabel(label: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(CircleShape).background(A.text).clickable(onClick = onClick).padding(horizontal = 22.dp, vertical = 14.dp),
+        horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AIcon(R.drawable.ic_github, tint = A.bg, size = 20.dp)
+        Spacer(Modifier.width(10.dp))
+        Text(label, color = A.bg, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+fun LoginGate(vm: MainVM, onSkip: () -> Unit) {
+    val device by vm.device.collectAsState()
+    Column(
+        Modifier.fillMaxSize().background(A.bg).statusBarsPadding().navigationBarsPadding().padding(horizontal = 28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Spacer(Modifier.weight(1f))
+        AIcon(R.drawable.ic_sparkle, tint = A.accent, size = 52.dp)
+        Spacer(Modifier.height(18.dp))
+        Text("Aura", color = A.text, fontFamily = FontFamily.Serif, fontSize = 44.sp)
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "Your AI agent that builds apps and ships them through GitHub.",
+            color = A.dim, fontSize = 16.sp, lineHeight = 23.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+        Spacer(Modifier.height(36.dp))
+        if (device != null) DeviceCard(vm, device!!) else GithubSignIn(vm)
+        Spacer(Modifier.weight(1f))
+        Text(
+            "Skip for now", color = A.dim, fontSize = 14.sp,
+            modifier = Modifier.padding(bottom = 18.dp).clip(CircleShape).clickable(onClick = onSkip).padding(horizontal = 16.dp, vertical = 10.dp),
+        )
+    }
+}
+
 // ------------------------------------------------------------ settings
 
 @Composable
 fun SettingsScreen(vm: MainVM) {
     val scope = rememberCoroutineScope()
     val providers by vm.store.providers.collectAsState()
-    val ghUser by vm.store.githubUser.collectAsState()
-    val ghToken by vm.store.githubToken.collectAsState()
     val theme by vm.store.theme.collectAsState()
-    val supaOn by vm.store.supaSync.collectAsState()
-    val supaUrl by vm.store.supaUrl.collectAsState()
-    val supaKey by vm.store.supaKey.collectAsState()
 
     val userSkills by vm.store.userSkills.collectAsState()
     val skillsOff by vm.store.skillsOff.collectAsState()
@@ -129,14 +237,6 @@ fun SettingsScreen(vm: MainVM) {
     var keylessBusy by remember { mutableStateOf("") }
     var keylessMsg by remember { mutableStateOf("") }
 
-    var token by remember { mutableStateOf("") }
-    var ghBusy by remember { mutableStateOf(false) }
-    var ghMsg by remember { mutableStateOf("") }
-    var supaMsg by remember { mutableStateOf("") }
-    var supaBusy by remember { mutableStateOf(false) }
-    var advanced by remember { mutableStateOf(false) }
-    var url by remember(supaUrl) { mutableStateOf(supaUrl) }
-    var key by remember(supaKey) { mutableStateOf(supaKey) }
 
     Column(Modifier.fillMaxSize().background(A.bg).statusBarsPadding().navigationBarsPadding().imePadding()) {
         SkillDialogs(vm, skillDialog, { skillDialog = null }, skillNew, { skillNew = false }, importOpen, { importOpen = false })
@@ -170,171 +270,7 @@ fun SettingsScreen(vm: MainVM) {
                     }
                 }
             }
-            item {
-                val clientId by vm.store.githubClientId.collectAsState()
-                val device by vm.device.collectAsState()
-                val loginMsg by vm.loginMsg.collectAsState()
-                val uri = androidx.compose.ui.platform.LocalUriHandler.current
-                val clip = androidx.compose.ui.platform.LocalClipboardManager.current
-                Section("GitHub") {
-                    if (ghToken.isNotBlank()) {
-                        Row(
-                            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(A.surface).border(1.dp, A.border, RoundedCornerShape(16.dp)).padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            AIcon(R.drawable.ic_branch, tint = A.accent)
-                            Spacer(Modifier.width(14.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text("Signed in", color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                                Text(ghUser.ifBlank { "GitHub account" }, color = A.dim, fontSize = 13.sp)
-                            }
-                            PillButton("Sign out", { vm.disconnectGithub() }, primary = false, danger = true)
-                        }
-                    } else if (device != null) {
-                        val d = device!!
-                        Column(
-                            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(A.surface).border(1.dp, A.border, RoundedCornerShape(16.dp)).padding(18.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            Text("Enter this code on GitHub", color = A.dim, fontSize = 13.sp)
-                            Spacer(Modifier.height(8.dp))
-                            Text(d.userCode, color = A.text, fontFamily = FontFamily.Monospace, fontSize = 34.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 4.sp)
-                            Spacer(Modifier.height(14.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                PillButton("Copy and open GitHub", { clip.setText(androidx.compose.ui.text.AnnotatedString(d.userCode)); runCatching { uri.openUri(d.uri) } })
-                            }
-                            Spacer(Modifier.height(12.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(Modifier.size(14.dp), color = A.accent, strokeWidth = 2.dp)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Waiting for you to approve", color = A.dim, fontSize = 13.sp)
-                            }
-                            Spacer(Modifier.height(10.dp))
-                            PillButton("Cancel", { vm.cancelGithubLogin() }, primary = false)
-                        }
-                    } else {
-                        Text(
-                            "Sign in with a one-time code. GitHub opens, you type the code, and Aura is connected.",
-                            color = A.dim, fontSize = 13.sp, lineHeight = 19.sp,
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        PillButton("Sign in with GitHub", { vm.startGithubLogin() })
-                        var custom by remember { mutableStateOf(false) }
-                        Text(
-                            if (custom) "Hide custom Client ID" else "Use my own OAuth App", color = A.dim, fontSize = 13.sp,
-                            modifier = Modifier.padding(top = 12.dp).clickable { custom = !custom },
-                        )
-                        if (custom) {
-                            Spacer(Modifier.height(8.dp))
-                            Field("OAuth App Client ID", clientId, { vm.store.setGithubClientId(it) }, placeholder = "Ov23li...", mono = true)
-                        }
-                        if (loginMsg.isNotBlank()) Text(loginMsg, color = A.danger, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
-                    }
-                }
-            }
-            item {
-                Section("Backup and sync") {
-                    Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(A.surface).border(1.dp, A.border, RoundedCornerShape(16.dp)).padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        AIcon(R.drawable.ic_database, tint = A.accent)
-                        Spacer(Modifier.width(14.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("Supabase backup", color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                            Text("Chats and your GitHub OAuth token", color = A.dim, fontSize = 13.sp)
-                        }
-                        Switch(
-                            checked = supaOn, onCheckedChange = { vm.store.setSupabase(url, key, it) },
-                            colors = SwitchDefaults.colors(checkedTrackColor = A.accent, checkedThumbColor = A.onAccent, uncheckedTrackColor = A.border, uncheckedThumbColor = A.dim, uncheckedBorderColor = Color.Transparent),
-                        )
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PillButton("Test connection", { supaBusy = true; scope.launch { supaMsg = vm.testSupabase(); supaBusy = false } }, primary = false, loading = supaBusy)
-                        PillButton(if (advanced) "Hide advanced" else "Advanced", { advanced = !advanced }, primary = false)
-                    }
-                    if (supaMsg.isNotBlank()) Text(supaMsg, color = if (supaMsg == "Synced") A.accent else A.dim, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
-                    if (advanced) {
-                        Spacer(Modifier.height(12.dp))
-                        Field("Project URL", url, { url = it }, placeholder = "https://xyz.supabase.co")
-                        Spacer(Modifier.height(10.dp))
-                        Field("Publishable key", key, { key = it }, secret = true)
-                        Spacer(Modifier.height(10.dp))
-                        PillButton("Save", { vm.store.setSupabase(url.trim(), key.trim(), supaOn) }, primary = false)
-                    }
-                }
-            }
-            item {
-                Section("Connect without API key") {
-                    Text(
-                        "These endpoints work without a key. Models are fetched automatically and appear in the model switcher.",
-                        color = A.dim, fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(bottom = 12.dp),
-                    )
-                    Row(
-                        Modifier.fillMaxWidth().padding(bottom = 10.dp).clip(RoundedCornerShape(16.dp)).background(A.surface)
-                            .border(1.dp, A.border, RoundedCornerShape(16.dp)).padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        AIcon(R.drawable.ic_bolt, tint = A.accent)
-                        Spacer(Modifier.width(14.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("Pollinations", color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                            Text("Free hosted models, no account", color = A.dim, fontSize = 13.sp)
-                        }
-                        PillButton("Connect", {
-                            keylessBusy = "pollinations"; keylessMsg = ""
-                            scope.launch {
-                                vm.addKeyless("pollinations").onSuccess { keylessMsg = it }.onFailure { keylessMsg = it.message ?: "Failed" }
-                                keylessBusy = ""
-                            }
-                        }, loading = keylessBusy == "pollinations")
-                    }
-                    Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(A.surface)
-                            .border(1.dp, A.border, RoundedCornerShape(16.dp)).clickable { vm.go(Route.Provider(null, "local")) }.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        AIcon(R.drawable.ic_cloud, tint = A.accent)
-                        Spacer(Modifier.width(14.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("Local server", color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                            Text("Ollama or LM Studio on your network", color = A.dim, fontSize = 13.sp)
-                        }
-                        AIcon(R.drawable.ic_chevron_right, tint = A.dim, size = 20.dp)
-                    }
-                    if (keylessMsg.isNotBlank()) Text(keylessMsg, color = A.dim, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
-                }
-            }
-            item {
-                Section("Skills") {
-                    Text(
-                        "Skills are instruction packs the agent loads on demand. Turn them on or off, write your own, or import a SKILL.md.",
-                        color = A.dim, fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(bottom = 12.dp),
-                    )
-                    (com.aura.agent.data.Skills.builtin + userSkills).forEach { sk ->
-                        Row(
-                            Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(16.dp)).background(A.surface)
-                                .border(1.dp, A.border, RoundedCornerShape(16.dp)).clickable { skillDialog = sk }
-                                .padding(start = 16.dp, top = 10.dp, bottom = 10.dp, end = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(sk.name, color = A.text, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                                Text(sk.description, color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            }
-                            Switch(
-                                checked = sk.id !in skillsOff, onCheckedChange = { vm.store.setSkillEnabled(sk.id, it) },
-                                colors = SwitchDefaults.colors(checkedTrackColor = A.accent, checkedThumbColor = A.onAccent, uncheckedTrackColor = A.border, uncheckedThumbColor = A.dim, uncheckedBorderColor = Color.Transparent),
-                            )
-                        }
-                    }
-                    Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PillButton("New skill", { skillNew = true }, primary = false)
-                        PillButton("Import", { importOpen = true }, primary = false)
-                    }
-                }
-            }
+            item { Section("GitHub") { GithubSignIn(vm) } }
             item {
                 Section("Appearance") {
                     Segmented(listOf("system" to "System", "light" to "Light", "dark" to "Dark"), theme) { vm.store.setTheme(it) }
