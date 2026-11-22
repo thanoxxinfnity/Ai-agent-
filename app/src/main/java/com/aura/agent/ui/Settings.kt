@@ -171,6 +171,11 @@ fun SettingsScreen(vm: MainVM) {
                 }
             }
             item {
+                val clientId by vm.store.githubClientId.collectAsState()
+                val device by vm.device.collectAsState()
+                val loginMsg by vm.loginMsg.collectAsState()
+                val uri = androidx.compose.ui.platform.LocalUriHandler.current
+                val clip = androidx.compose.ui.platform.LocalClipboardManager.current
                 Section("GitHub") {
                     if (ghToken.isNotBlank()) {
                         Row(
@@ -180,27 +185,43 @@ fun SettingsScreen(vm: MainVM) {
                             AIcon(R.drawable.ic_branch, tint = A.accent)
                             Spacer(Modifier.width(14.dp))
                             Column(Modifier.weight(1f)) {
-                                Text("Connected", color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                                Text(ghUser.ifBlank { "token saved" }, color = A.dim, fontSize = 13.sp)
+                                Text("Signed in", color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                                Text(ghUser.ifBlank { "GitHub account" }, color = A.dim, fontSize = 13.sp)
                             }
-                            PillButton("Disconnect", { vm.disconnectGithub() }, primary = false, danger = true)
+                            PillButton("Sign out", { vm.disconnectGithub() }, primary = false, danger = true)
+                        }
+                    } else if (device != null) {
+                        val d = device!!
+                        Column(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(A.surface).border(1.dp, A.border, RoundedCornerShape(16.dp)).padding(18.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text("Enter this code on GitHub", color = A.dim, fontSize = 13.sp)
+                            Spacer(Modifier.height(8.dp))
+                            Text(d.userCode, color = A.text, fontFamily = FontFamily.Monospace, fontSize = 34.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 4.sp)
+                            Spacer(Modifier.height(14.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                PillButton("Copy and open GitHub", { clip.setText(androidx.compose.ui.text.AnnotatedString(d.userCode)); runCatching { uri.openUri(d.uri) } })
+                            }
+                            Spacer(Modifier.height(12.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.size(14.dp), color = A.accent, strokeWidth = 2.dp)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Waiting for you to approve", color = A.dim, fontSize = 13.sp)
+                            }
+                            Spacer(Modifier.height(10.dp))
+                            PillButton("Cancel", { vm.cancelGithubLogin() }, primary = false)
                         }
                     } else {
-                        Field("Fine-grained access token", token, { token = it }, placeholder = "github_pat_...", secret = true)
+                        Field("OAuth App Client ID", clientId, { vm.store.setGithubClientId(it) }, placeholder = "Ov23li...", mono = true)
                         Spacer(Modifier.height(10.dp))
                         Text(
-                            "Create it at github.com/settings/personal-access-tokens with access to All repositories and these permissions: Administration, Contents, Workflows, Actions (all Read and write) and Metadata (Read).",
+                            "Create an OAuth App at github.com/settings/developers, tick Enable Device Flow, and paste its Client ID here. No secret is needed. Then sign in with a one-time code.",
                             color = A.dim, fontSize = 13.sp, lineHeight = 19.sp,
                         )
                         Spacer(Modifier.height(12.dp))
-                        PillButton("Connect GitHub", {
-                            ghBusy = true; ghMsg = ""
-                            scope.launch {
-                                vm.connectGithub(token).onSuccess { token = ""; ghMsg = "" }.onFailure { ghMsg = it.message ?: "Could not connect" }
-                                ghBusy = false
-                            }
-                        }, enabled = token.isNotBlank(), loading = ghBusy)
-                        if (ghMsg.isNotBlank()) Text(ghMsg, color = A.danger, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+                        PillButton("Sign in with GitHub", { vm.startGithubLogin() }, enabled = clientId.isNotBlank())
+                        if (loginMsg.isNotBlank()) Text(loginMsg, color = A.danger, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
                     }
                 }
             }
@@ -214,7 +235,7 @@ fun SettingsScreen(vm: MainVM) {
                         Spacer(Modifier.width(14.dp))
                         Column(Modifier.weight(1f)) {
                             Text("Supabase backup", color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                            Text("Chats and GitHub token, per device", color = A.dim, fontSize = 13.sp)
+                            Text("Chats and your GitHub OAuth token", color = A.dim, fontSize = 13.sp)
                         }
                         Switch(
                             checked = supaOn, onCheckedChange = { vm.store.setSupabase(url, key, it) },

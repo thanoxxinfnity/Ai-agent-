@@ -56,6 +56,9 @@ class Store(ctx: Context) {
     val githubToken = _githubToken.asStateFlow()
     private val _githubUser = MutableStateFlow(s("githubUser"))
     val githubUser = _githubUser.asStateFlow()
+    private val _githubClientId = MutableStateFlow(s("githubClientId"))
+    val githubClientId = _githubClientId.asStateFlow()
+    fun setGithubClientId(v: String) { _githubClientId.value = v.trim(); prefs.edit().putString("githubClientId", v.trim()).apply() }
     private val _theme = MutableStateFlow(s("theme", "system"))
     val theme = _theme.asStateFlow()
     private val _supaUrl = MutableStateFlow(s("supaUrl", BuildConfig.SUPABASE_URL))

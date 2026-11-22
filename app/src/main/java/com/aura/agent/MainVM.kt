@@ -73,12 +73,35 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     }
 
     // ---- settings helpers ----
-    suspend fun connectGithub(token: String): Result<String> = runCatching {
-        val user = GitHub(token.trim()).login()
-        store.setGithub(token.trim(), user)
-        a.supabase.pushSecret("github_token", token.trim())
-        user
+    val device = MutableStateFlow<com.aura.agent.net.GhOAuth.Device?>(null)
+    val loginMsg = MutableStateFlow("")
+    private var loginJob: kotlinx.coroutines.Job? = null
+
+    fun startGithubLogin() {
+        loginJob?.cancel()
+        loginMsg.value = ""
+        val id = store.githubClientId.value
+        if (id.isBlank()) { loginMsg.value = "Enter your OAuth App Client ID first."; return }
+        loginJob = viewModelScope.launch {
+            try {
+                val d = com.aura.agent.net.GhOAuth.start(id)
+                device.value = d
+                val token = com.aura.agent.net.GhOAuth.poll(id, d)
+                val user = GitHub(token).login()
+                store.setGithub(token, user)
+                a.supabase.pushSecret("github_token", token)
+                loginMsg.value = ""
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                loginMsg.value = e.message ?: "Sign in failed"
+            } finally {
+                device.value = null
+            }
+        }
     }
+
+    fun cancelGithubLogin() { loginJob?.cancel(); device.value = null }
 
     fun disconnectGithub() = store.setGithub("", "")
 
