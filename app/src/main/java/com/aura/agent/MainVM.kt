@@ -85,4 +85,23 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     suspend fun fetchModels(p: Provider): Result<List<String>> = runCatching { Llm.listModels(p) }
 
     suspend fun testSupabase(): String = a.supabase.test()
+
+    suspend fun addKeyless(kind: String): Result<String> = runCatching {
+        val (name, base, models) = when (kind) {
+            "pollinations" -> Triple("Pollinations (no key)", "https://text.pollinations.ai/openai", "https://text.pollinations.ai/models")
+            else -> error("unknown connector")
+        }
+        val existing = store.providers.value.firstOrNull { it.baseUrl == base }
+        val draft = existing ?: Provider(id = Ids.id(), name = name, baseUrl = base, modelsUrl = models)
+        val list = Llm.listModels(draft)
+        val p = draft.copy(models = list, defaultModel = list.firstOrNull().orEmpty())
+        store.upsertProvider(p)
+        store.select(p.id, p.defaultModel)
+        "${list.size} models connected"
+    }
+
+    suspend fun importSkill(url: String): Result<String> = runCatching {
+        val sk = Skills.fetch(url) ?: error("Could not read a skill from that URL")
+        store.upsertSkill(sk); sk.name
+    }
 }

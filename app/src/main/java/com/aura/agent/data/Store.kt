@@ -65,6 +65,29 @@ class Store(ctx: Context) {
     private val _supaSync = MutableStateFlow(prefs.getBoolean("supaSync", true))
     val supaSync = _supaSync.asStateFlow()
 
+    private val _userSkills = MutableStateFlow(
+        runCatching { AppJson.decodeFromString<List<Skill>>(s("userSkills", "[]")) }.getOrDefault(emptyList())
+    )
+    val userSkills: StateFlow<List<Skill>> = _userSkills.asStateFlow()
+    private val _skillsOff = MutableStateFlow(s("skillsOff").split(",").filter { it.isNotBlank() }.toSet())
+    val skillsOff: StateFlow<Set<String>> = _skillsOff.asStateFlow()
+
+    fun allSkills(): List<Skill> = Skills.builtin + _userSkills.value
+    fun enabledSkills(): List<Skill> = allSkills().filter { it.id !in _skillsOff.value }
+    fun setSkillEnabled(id: String, on: Boolean) {
+        _skillsOff.value = if (on) _skillsOff.value - id else _skillsOff.value + id
+        prefs.edit().putString("skillsOff", _skillsOff.value.joinToString(",")).apply()
+    }
+    fun upsertSkill(sk: Skill) {
+        val cur = _userSkills.value.filterNot { it.id == sk.id || it.name == sk.name }
+        _userSkills.value = cur + sk.copy(builtin = false)
+        prefs.edit().putString("userSkills", AppJson.encodeToString(_userSkills.value)).apply()
+    }
+    fun deleteSkill(id: String) {
+        _userSkills.value = _userSkills.value.filterNot { it.id == id }
+        prefs.edit().putString("userSkills", AppJson.encodeToString(_userSkills.value)).apply()
+    }
+
     var supaAccess: String
         get() = s("supaAccess"); set(v) { prefs.edit().putString("supaAccess", v).apply() }
     var supaRefresh: String

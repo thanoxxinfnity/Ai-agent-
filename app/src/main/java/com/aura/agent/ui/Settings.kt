@@ -121,6 +121,14 @@ fun SettingsScreen(vm: MainVM) {
     val supaUrl by vm.store.supaUrl.collectAsState()
     val supaKey by vm.store.supaKey.collectAsState()
 
+    val userSkills by vm.store.userSkills.collectAsState()
+    val skillsOff by vm.store.skillsOff.collectAsState()
+    var skillDialog by remember { mutableStateOf<com.aura.agent.data.Skill?>(null) }
+    var skillNew by remember { mutableStateOf(false) }
+    var importOpen by remember { mutableStateOf(false) }
+    var keylessBusy by remember { mutableStateOf("") }
+    var keylessMsg by remember { mutableStateOf("") }
+
     var token by remember { mutableStateOf("") }
     var ghBusy by remember { mutableStateOf(false) }
     var ghMsg by remember { mutableStateOf("") }
@@ -131,6 +139,7 @@ fun SettingsScreen(vm: MainVM) {
     var key by remember(supaKey) { mutableStateOf(supaKey) }
 
     Column(Modifier.fillMaxSize().background(A.bg).statusBarsPadding().navigationBarsPadding().imePadding()) {
+        SkillDialogs(vm, skillDialog, { skillDialog = null }, skillNew, { skillNew = false }, importOpen, { importOpen = false })
         TopBar("Settings", { vm.go(Route.Chat) })
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 40.dp)) {
             item {
@@ -229,6 +238,76 @@ fun SettingsScreen(vm: MainVM) {
                 }
             }
             item {
+                Section("Connect without API key") {
+                    Text(
+                        "These endpoints work without a key. Models are fetched automatically and appear in the model switcher.",
+                        color = A.dim, fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(bottom = 12.dp),
+                    )
+                    Row(
+                        Modifier.fillMaxWidth().padding(bottom = 10.dp).clip(RoundedCornerShape(16.dp)).background(A.surface)
+                            .border(1.dp, A.border, RoundedCornerShape(16.dp)).padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AIcon(R.drawable.ic_bolt, tint = A.accent)
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Pollinations", color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                            Text("Free hosted models, no account", color = A.dim, fontSize = 13.sp)
+                        }
+                        PillButton("Connect", {
+                            keylessBusy = "pollinations"; keylessMsg = ""
+                            scope.launch {
+                                vm.addKeyless("pollinations").onSuccess { keylessMsg = it }.onFailure { keylessMsg = it.message ?: "Failed" }
+                                keylessBusy = ""
+                            }
+                        }, loading = keylessBusy == "pollinations")
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(A.surface)
+                            .border(1.dp, A.border, RoundedCornerShape(16.dp)).clickable { vm.go(Route.Provider(null, "local")) }.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AIcon(R.drawable.ic_cloud, tint = A.accent)
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Local server", color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                            Text("Ollama or LM Studio on your network", color = A.dim, fontSize = 13.sp)
+                        }
+                        AIcon(R.drawable.ic_chevron_right, tint = A.dim, size = 20.dp)
+                    }
+                    if (keylessMsg.isNotBlank()) Text(keylessMsg, color = A.dim, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+                }
+            }
+            item {
+                Section("Skills") {
+                    Text(
+                        "Skills are instruction packs the agent loads on demand. Turn them on or off, write your own, or import a SKILL.md.",
+                        color = A.dim, fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(bottom = 12.dp),
+                    )
+                    (com.aura.agent.data.Skills.builtin + userSkills).forEach { sk ->
+                        Row(
+                            Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(16.dp)).background(A.surface)
+                                .border(1.dp, A.border, RoundedCornerShape(16.dp)).clickable { skillDialog = sk }
+                                .padding(start = 16.dp, top = 10.dp, bottom = 10.dp, end = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(sk.name, color = A.text, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                                Text(sk.description, color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
+                            Switch(
+                                checked = sk.id !in skillsOff, onCheckedChange = { vm.store.setSkillEnabled(sk.id, it) },
+                                colors = SwitchDefaults.colors(checkedTrackColor = A.accent, checkedThumbColor = A.onAccent, uncheckedTrackColor = A.border, uncheckedThumbColor = A.dim, uncheckedBorderColor = Color.Transparent),
+                            )
+                        }
+                    }
+                    Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PillButton("New skill", { skillNew = true }, primary = false)
+                        PillButton("Import", { importOpen = true }, primary = false)
+                    }
+                }
+            }
+            item {
                 Section("Appearance") {
                     Segmented(listOf("system" to "System", "light" to "Light", "dark" to "Dark"), theme) { vm.store.setTheme(it) }
                 }
@@ -240,6 +319,83 @@ fun SettingsScreen(vm: MainVM) {
     }
 }
 
+@Composable
+private fun SkillDialogs(
+    vm: MainVM, view: com.aura.agent.data.Skill?, onCloseView: () -> Unit, creating: Boolean, onCloseCreate: () -> Unit,
+    importing: Boolean, onCloseImport: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    if (view != null || creating) {
+        val editable = creating || view?.builtin == false
+        var name by remember(view?.id, creating) { mutableStateOf(view?.name ?: "") }
+        var desc by remember(view?.id, creating) { mutableStateOf(view?.description ?: "") }
+        var body by remember(view?.id, creating) { mutableStateOf(view?.instructions ?: "") }
+        val close = { onCloseView(); onCloseCreate() }
+        AlertDialog(
+            onDismissRequest = close, containerColor = A.surface,
+            title = { Text(if (creating) "New skill" else view!!.name, fontFamily = FontFamily.Serif) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (editable) {
+                        Field("Name", name, { name = it }, placeholder = "release-notes")
+                        Field("When to use it", desc, { desc = it }, placeholder = "One sentence")
+                        Field("Instructions", body, { body = it }, singleLine = false, minLines = 6, placeholder = "Step by step instructions")
+                    } else {
+                        Text(view!!.description, color = A.dim, fontSize = 13.sp)
+                        Text(view.instructions, color = A.text, fontSize = 14.sp, lineHeight = 20.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                if (editable) TextButton({
+                    if (name.isNotBlank() && body.isNotBlank()) {
+                        val slug = name.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')
+                        vm.store.upsertSkill(com.aura.agent.data.Skill(view?.id ?: Ids.id(), slug, desc.trim(), body.trim()))
+                        close()
+                    }
+                }) { Text("Save", color = A.accent) } else TextButton(close) { Text("Close", color = A.accent) }
+            },
+            dismissButton = {
+                if (editable && view != null) TextButton({ vm.store.deleteSkill(view.id); close() }) { Text("Delete", color = A.danger) }
+                else if (editable) TextButton(close) { Text("Cancel", color = A.dim) }
+            },
+        )
+    }
+    if (importing) {
+        var text by remember { mutableStateOf("") }
+        var busy by remember { mutableStateOf(false) }
+        var err by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = onCloseImport, containerColor = A.surface,
+            title = { Text("Import skill", fontFamily = FontFamily.Serif) },
+            text = {
+                Column {
+                    Text("Paste a SKILL.md, or a link to one (GitHub links work).", color = A.dim, fontSize = 13.sp)
+                    Spacer(Modifier.height(10.dp))
+                    Field("SKILL.md or URL", text, { text = it }, singleLine = false, minLines = 5, mono = true)
+                    if (err.isNotBlank()) Text(err, color = A.danger, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+                }
+            },
+            confirmButton = {
+                TextButton({
+                    busy = true; err = ""
+                    scope.launch {
+                        val t = text.trim()
+                        if (t.startsWith("http://") || t.startsWith("https://")) {
+                            vm.importSkill(t).onSuccess { onCloseImport() }.onFailure { err = it.message ?: "Import failed" }
+                        } else {
+                            val sk = com.aura.agent.data.Skills.parse(t)
+                            if (sk == null) err = "Could not find a name and instructions" else { vm.store.upsertSkill(sk); onCloseImport() }
+                        }
+                        busy = false
+                    }
+                }, enabled = text.isNotBlank() && !busy) { Text("Import", color = A.accent) }
+            },
+            dismissButton = { TextButton(onCloseImport) { Text("Cancel", color = A.dim) } },
+        )
+    }
+}
+
 // ------------------------------------------------------------ provider editor
 
 private data class Preset(val name: String, val url: String, val wire: String = "chat")
@@ -248,6 +404,7 @@ private val presets = mapOf(
     "gemini" to Preset("Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai"),
     "nvidia" to Preset("NVIDIA NIM", "https://integrate.api.nvidia.com/v1"),
     "openai" to Preset("OpenAI", "https://api.openai.com/v1"),
+    "local" to Preset("Local server", "http://192.168.1.10:11434/v1"),
     "custom" to Preset("", ""),
 )
 

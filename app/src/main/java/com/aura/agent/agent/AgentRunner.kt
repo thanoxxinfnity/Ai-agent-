@@ -146,7 +146,7 @@ class AgentRunner(private val app: App) {
         dao.upsertMessage(placeholder)
         val sb = StringBuilder()
         var lastEmit = 0L
-        val calls = Llm.stream(provider, model, SYSTEM, llm, Tools.defs) { chunk ->
+        val calls = Llm.stream(provider, model, systemPrompt(), llm, Tools.defs) { chunk ->
             sb.append(chunk)
             val now = System.currentTimeMillis()
             if (now - lastEmit > 40) { lastEmit = now; live.update { it + (id to sb.toString()) } }
@@ -160,6 +160,13 @@ class AgentRunner(private val app: App) {
         dao.upsertMessage(row)
         live.update { it - id }
         return calls
+    }
+
+    private fun systemPrompt(): String {
+        val skills = store.enabledSkills()
+        if (skills.isEmpty()) return SYSTEM
+        return SYSTEM + "\n\nAvailable skills (call use_skill with the name to load the full instructions when the task matches):\n" +
+            skills.joinToString("\n") { "- ${it.name}: ${it.description}" }
     }
 
     private fun toLlm(history: List<MessageEntity>): List<LlmMsg> {

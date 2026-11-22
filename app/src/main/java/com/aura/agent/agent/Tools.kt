@@ -26,6 +26,19 @@ object Tools {
     }
 
     val defs: List<ToolDef> = listOf(
+        ToolDef(
+            "use_skill", "Load the full instructions of one of the enabled skills listed in the system prompt. Call it before starting work that matches a skill.",
+            schema(listOf("name"), "name" to prop("string", "Skill name")),
+        ),
+        ToolDef(
+            "create_skill", "Save a reusable skill (a named set of instructions) so it is available in future chats.",
+            schema(
+                listOf("name", "description", "instructions"),
+                "name" to prop("string", "Short slug like release-notes"),
+                "description" to prop("string", "One sentence: when to use it"),
+                "instructions" to prop("string", "Step by step instructions in Markdown"),
+            ),
+        ),
         ToolDef("github_whoami", "Show the authenticated GitHub user.", schema(emptyList())),
         ToolDef("github_list_repos", "List the user's most recently updated repositories.", schema(emptyList())),
         ToolDef(
@@ -80,10 +93,24 @@ object Tools {
     private fun JsonElement?.s(k: String) = (this as? JsonObject)?.s(k)
 
     suspend fun execute(store: Store, name: String, argsJson: String): String {
+        val a = runCatching { AppJsonLenient.parseToJsonElement(argsJson.ifBlank { "{}" }).o() }.getOrElse { return "ERROR: invalid JSON arguments" }
+        if (name == "use_skill") {
+            val n = a.s("name").orEmpty()
+            val sk = store.enabledSkills().firstOrNull { it.name.equals(n, true) || it.id == n }
+            return sk?.instructions ?: "ERROR: no enabled skill named '$n'. Available: ${store.enabledSkills().joinToString { it.name }}"
+        }
+        if (name == "create_skill") {
+            val sk = com.aura.agent.data.Skill(
+                com.aura.agent.data.Ids.id(),
+                (a.s("name") ?: return "ERROR: name required").lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-'),
+                a.s("description").orEmpty(), a.s("instructions") ?: return "ERROR: instructions required",
+            )
+            store.upsertSkill(sk)
+            return "Skill '${sk.name}' saved. It is now listed under Settings > Skills."
+        }
         val token = store.githubToken.value
         if (token.isBlank()) return "ERROR: No GitHub token. Ask the user to add one in Settings > GitHub."
         val gh = GitHub(token)
-        val a = runCatching { AppJsonLenient.parseToJsonElement(argsJson.ifBlank { "{}" }).o() }.getOrElse { return "ERROR: invalid JSON arguments" }
         return try {
             val me = store.githubUser.value.ifBlank { gh.login().also { store.setGithub(token, it) } }
             fun full(r: String) = if ("/" in r) r else "$me/$r"
@@ -201,6 +228,8 @@ object Tools {
 
     /** One-line description for the UI and notifications. */
     fun label(name: String) = when (name) {
+        "use_skill" -> "Loading skill"
+        "create_skill" -> "Saving skill"
         "github_whoami" -> "Checking GitHub account"
         "github_list_repos" -> "Listing repositories"
         "github_create_repo" -> "Creating repository"
