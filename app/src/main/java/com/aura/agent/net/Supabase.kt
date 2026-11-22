@@ -85,6 +85,26 @@ class Supabase(private val store: Store) {
         }, "user_id,name")
     }
 
+    /** Reads public app settings (such as the GitHub OAuth Client ID) from the app_config table. */
+    suspend fun loadConfig() {
+        if (store.supaUrl.value.isBlank() || store.supaKey.value.isBlank()) return
+        runCatching {
+            withContext(Dispatchers.IO) {
+                val req = Request.Builder().url(base() + "/rest/v1/app_config?select=key,value")
+                    .header("apikey", store.supaKey.value).get().build()
+                Http.client.newCall(req).execute().use { r ->
+                    if (!r.isSuccessful) return@use
+                    val arr = AppJsonLenient.parseToJsonElement(r.body?.string().orEmpty()) as? JsonArray ?: return@use
+                    arr.forEach { e ->
+                        val o = e as? JsonObject ?: return@forEach
+                        val v = (o["value"] as? JsonPrimitive)?.contentOrNull ?: return@forEach
+                        if ((o["key"] as? JsonPrimitive)?.contentOrNull == "github_client_id" && v.isNotBlank()) store.setGithubClientId(v)
+                    }
+                }
+            }
+        }
+    }
+
     /** Used by Settings to test the connection. */
     suspend fun test(): String {
         guarded { }

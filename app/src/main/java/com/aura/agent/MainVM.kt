@@ -80,10 +80,11 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     fun startGithubLogin() {
         loginJob?.cancel()
         loginMsg.value = ""
-        val id = store.githubClientId.value
-        if (id.isBlank()) { loginMsg.value = "Enter your OAuth App Client ID first."; return }
         loginJob = viewModelScope.launch {
             try {
+                if (store.githubClientId.value.isBlank()) a.supabase.loadConfig()
+                val id = store.githubClientId.value
+                if (id.isBlank()) error("GitHub sign in is not configured yet. Enter an OAuth App Client ID in Settings.")
                 val d = com.aura.agent.net.GhOAuth.start(id)
                 device.value = d
                 val token = com.aura.agent.net.GhOAuth.poll(id, d)

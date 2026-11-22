@@ -213,14 +213,21 @@ fun SettingsScreen(vm: MainVM) {
                             PillButton("Cancel", { vm.cancelGithubLogin() }, primary = false)
                         }
                     } else {
-                        Field("OAuth App Client ID", clientId, { vm.store.setGithubClientId(it) }, placeholder = "Ov23li...", mono = true)
-                        Spacer(Modifier.height(10.dp))
                         Text(
-                            "Create an OAuth App at github.com/settings/developers, tick Enable Device Flow, and paste its Client ID here. No secret is needed. Then sign in with a one-time code.",
+                            "Sign in with a one-time code. GitHub opens, you type the code, and Aura is connected.",
                             color = A.dim, fontSize = 13.sp, lineHeight = 19.sp,
                         )
                         Spacer(Modifier.height(12.dp))
-                        PillButton("Sign in with GitHub", { vm.startGithubLogin() }, enabled = clientId.isNotBlank())
+                        PillButton("Sign in with GitHub", { vm.startGithubLogin() })
+                        var custom by remember { mutableStateOf(false) }
+                        Text(
+                            if (custom) "Hide custom Client ID" else "Use my own OAuth App", color = A.dim, fontSize = 13.sp,
+                            modifier = Modifier.padding(top = 12.dp).clickable { custom = !custom },
+                        )
+                        if (custom) {
+                            Spacer(Modifier.height(8.dp))
+                            Field("OAuth App Client ID", clientId, { vm.store.setGithubClientId(it) }, placeholder = "Ov23li...", mono = true)
+                        }
                         if (loginMsg.isNotBlank()) Text(loginMsg, color = A.danger, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
                     }
                 }

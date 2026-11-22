@@ -34,6 +34,7 @@ class App : Application() {
         store = Store(this)
         supabase = Supabase(store)
         runner = AgentRunner(this)
+        appScope.launch { supabase.loadConfig() }
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CH_RUN, "Background work", NotificationManager.IMPORTANCE_LOW))
         nm.createNotificationChannel(NotificationChannel(CH_DONE, "Finished replies", NotificationManager.IMPORTANCE_DEFAULT))
