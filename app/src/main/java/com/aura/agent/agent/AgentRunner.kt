@@ -27,7 +27,9 @@ class AgentRunner(private val app: App) {
     fun start(chatId: String) {
         if (isActive(chatId)) return
         active.update { it + chatId }
-        jobs[chatId] = scope.launch { run(chatId) }
+        val job = scope.launch(start = CoroutineStart.LAZY) { run(chatId) }
+        jobs[chatId] = job
+        job.start()
     }
 
     fun stop(chatId: String) {

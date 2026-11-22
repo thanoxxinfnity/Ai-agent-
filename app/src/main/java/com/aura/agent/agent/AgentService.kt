@@ -39,7 +39,7 @@ class AgentService : Service() {
         watcher?.cancel()
         watcher = scope.launch {
             // after a process restart nothing is running yet: ask the runner to resume unfinished chats
-            withContext(Dispatchers.IO) { app.runner.resumeAll() }
+            if (intent == null || intent.getBooleanExtra(EXTRA_RESUME, false)) withContext(Dispatchers.IO) { app.runner.resumeAll() }
             var seen = app.runner.active.value.isNotEmpty()
             combine(app.runner.active, app.runner.status) { a, s -> a to s }.collect { (active, status) ->
                 if (active.isNotEmpty()) {
@@ -87,8 +87,9 @@ class AgentService : Service() {
     companion object {
         const val NOTIF_ID = 42
         const val ACTION_STOP = "com.aura.agent.STOP"
-        fun start(ctx: Context) {
-            runCatching { ContextCompat.startForegroundService(ctx, Intent(ctx, AgentService::class.java)) }
+        const val EXTRA_RESUME = "resume"
+        fun start(ctx: Context, resume: Boolean = false) {
+            runCatching { ContextCompat.startForegroundService(ctx, Intent(ctx, AgentService::class.java).putExtra(EXTRA_RESUME, resume)) }
         }
     }
 }

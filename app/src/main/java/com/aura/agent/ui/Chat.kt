@@ -16,6 +16,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -174,7 +175,7 @@ private fun AssistantText(text: String, showActions: Boolean) {
     val clip = LocalClipboardManager.current
     Column(Modifier.fillMaxWidth()) {
         SelectionContainer { Markdown(text) }
-        if (showActions) Row(Modifier.padding(top = 4.dp, start = (-8).dp)) {
+        if (showActions) Row(Modifier.padding(top = 4.dp).offset(x = (-8).dp)) {
             IconBtn(R.drawable.ic_copy, { clip.setText(AnnotatedString(text)) }, tint = A.dim, size = 36.dp)
         }
     }
@@ -297,7 +298,7 @@ private fun Composer(
             Box(Modifier.fillMaxWidth()) {
                 if (value.isEmpty()) Text("Message Aura", color = A.dim, fontSize = 16.sp)
                 BasicTextField(
-                    value, onValue, modifier = Modifier.fillMaxWidth(),
+                    value, onValue, modifier = Modifier.fillMaxWidth().testTag("input"),
                     textStyle = TextStyle(color = A.text, fontSize = 16.sp, lineHeight = 23.sp),
                     cursorBrush = SolidColor(A.accent), maxLines = 7,
                 )
@@ -317,7 +318,7 @@ private fun Composer(
                 Spacer(Modifier.weight(1f))
                 val ready = running || value.isNotBlank()
                 Box(
-                    Modifier.size(40.dp).clip(CircleShape)
+                    Modifier.size(40.dp).testTag("send").clip(CircleShape)
                         .background(if (running) A.text else if (ready) A.accent else A.border)
                         .clickable(enabled = ready) { if (running) onStop() else onSend() },
                     contentAlignment = Alignment.Center,
@@ -422,7 +423,11 @@ private fun ModelPicker(
     var q by remember { mutableStateOf("") }
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = A.bg, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(0.85f).padding(horizontal = 16.dp)) {
-            Text("Choose model", color = A.text, fontFamily = FontFamily.Serif, fontSize = 24.sp, modifier = Modifier.padding(vertical = 6.dp))
+            val appCtx = androidx.compose.ui.platform.LocalContext.current.applicationContext as com.aura.agent.App
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Choose model", color = A.text, fontFamily = FontFamily.Serif, fontSize = 24.sp, modifier = Modifier.padding(vertical = 6.dp).weight(1f))
+                IconBtn(R.drawable.ic_refresh, { appCtx.refreshModels(true) }, tint = A.dim)
+            }
             if (providers.isEmpty()) {
                 Spacer(Modifier.height(12.dp))
                 Text("No providers yet.", color = A.dim, fontSize = 15.sp)

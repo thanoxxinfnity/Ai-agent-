@@ -16,7 +16,10 @@ import androidx.room.Room
 import com.aura.agent.agent.AgentRunner
 import com.aura.agent.data.AppDb
 import com.aura.agent.data.Store
+import com.aura.agent.net.Llm
 import com.aura.agent.net.Supabase
+import kotlinx.coroutines.*
+import java.util.concurrent.atomic.AtomicBoolean
 
 class App : Application() {
     lateinit var db: AppDb
@@ -35,9 +38,32 @@ class App : Application() {
         nm.createNotificationChannel(NotificationChannel(CH_RUN, "Background work", NotificationManager.IMPORTANCE_LOW))
         nm.createNotificationChannel(NotificationChannel(CH_DONE, "Finished replies", NotificationManager.IMPORTANCE_DEFAULT))
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
-            override fun onStart(owner: LifecycleOwner) { foreground = true }
+            override fun onStart(owner: LifecycleOwner) { foreground = true; refreshModels(false) }
             override fun onStop(owner: LifecycleOwner) { foreground = false }
         })
+    }
+
+    private val refreshing = AtomicBoolean(false)
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** Re-reads every provider's model list so new or removed models show up without manual work. */
+    fun refreshModels(force: Boolean) {
+        if (!force && System.currentTimeMillis() - store.modelsRefreshedAt < 6 * 3600_000L) return
+        if (!refreshing.compareAndSet(false, true)) return
+        appScope.launch {
+            try {
+                for (p in store.providers.value) {
+                    val list = runCatching { withTimeout(20_000) { Llm.listModels(p) } }.getOrNull().orEmpty()
+                    if (list.isEmpty()) continue
+                    val cur = store.providers.value.firstOrNull { it.id == p.id } ?: continue
+                    val keep = if (cur.defaultModel.isNotBlank() && cur.defaultModel !in list) list + cur.defaultModel else list
+                    store.saveProviders(store.providers.value.map { if (it.id == p.id) cur.copy(models = keep.distinct()) else it })
+                }
+                store.modelsRefreshedAt = System.currentTimeMillis()
+            } finally {
+                refreshing.set(false)
+            }
+        }
     }
 
     fun notifyDone(chatId: String, title: String, text: String) {

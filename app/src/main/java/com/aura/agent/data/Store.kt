@@ -96,6 +96,9 @@ class Store(ctx: Context) {
     var supaRefresh: String
         get() = s("supaRefresh"); set(v) { prefs.edit().putString("supaRefresh", v).apply() }
 
+    var modelsRefreshedAt: Long
+        get() = prefs.getLong("modelsRefreshedAt", 0L); set(v) { prefs.edit().putLong("modelsRefreshedAt", v).apply() }
+
     fun saveProviders(list: List<Provider>) {
         _providers.value = list
         prefs.edit().putString("providers", AppJson.encodeToString(list)).apply()

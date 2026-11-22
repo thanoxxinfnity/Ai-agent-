@@ -37,7 +37,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
-            if (dao.runningChats().isNotEmpty() && runner.active.value.isEmpty()) AgentService.start(app)
+            if (dao.runningChats().isNotEmpty() && runner.active.value.isEmpty()) AgentService.start(app, resume = true)
         }
     }
 
