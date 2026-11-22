@@ -56,6 +56,26 @@ fun MainScreen(vm: MainVM) {
             dismissButton = { TextButton({ crash = null }) { Text("Close", color = A.dim) } },
         )
     }
+    val approval by vm.runner.approval.collectAsState()
+    approval?.let { ap ->
+        AlertDialog(
+            onDismissRequest = {}, containerColor = A.surface,
+            title = { Text("Approve this action?", fontFamily = FontFamily.Serif) },
+            text = {
+                Column {
+                    Text(ap.title, color = A.danger, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.height(10.dp))
+                    Box(Modifier.fillMaxWidth().heightIn(max = 220.dp).clip(RoundedCornerShape(10.dp)).background(A.code)) {
+                        Text(ap.detail.take(1500), color = A.text, fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.verticalScroll(rememberScrollState()).padding(10.dp))
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Text("Aura will wait for your answer. No answer in 10 minutes counts as Deny.", color = A.dim, fontSize = 12.sp)
+                }
+            },
+            confirmButton = { TextButton({ vm.runner.resolveApproval(ap.id, true) }) { Text("Approve", color = A.accent) } },
+            dismissButton = { TextButton({ vm.runner.resolveApproval(ap.id, false) }) { Text("Deny", color = A.danger) } },
+        )
+    }
     var shown by remember { mutableStateOf<Route>(Route.Settings) }
     if (route != Route.Chat) shown = route
     Box(Modifier.fillMaxSize().background(A.bg)) {
@@ -152,27 +172,66 @@ private fun MessageList(messages: List<MessageEntity>, vm: MainVM) {
     val status by vm.runner.status.collectAsState()
     val reversed = remember(messages) { messages.asReversed() }
     val state = rememberLazyListState()
+    val cps by vm.checkpointTurns.collectAsState()
+    var confirmTurn by remember { mutableStateOf<String?>(null) }
+    // the final answer of each turn that changed something gets a "Restore checkpoint" button
+    val restoreFor = remember(messages, cps) {
+        val map = HashMap<String, String>()
+        var turn = ""
+        messages.forEachIndexed { i, m ->
+            if (m.role == "user") turn = m.id
+            val next = messages.getOrNull(i + 1)
+            if (m.role == "assistant" && !m.isError && m.toolCalls == null && m.content.isNotBlank() && (next == null || next.role == "user") && cps[turn] != null) map[m.id] = turn
+        }
+        map
+    }
     LazyColumn(
         state = state, reverseLayout = true, modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (running) item(key = "thinking") { Thinking(status) }
-        items(reversed, key = { it.id }) { m -> MessageItem(m, liveState) }
+        items(reversed, key = { it.id }) { m -> MessageItem(m, liveState, restoreFor[m.id]?.let { t -> cps[t] ?: 0 }, { restoreFor[m.id]?.let { t -> confirmTurn = t } }) }
+    }
+    confirmTurn?.let { t ->
+        AlertDialog(
+            onDismissRequest = { confirmTurn = null }, containerColor = A.surface,
+            title = { Text("Restore checkpoint?", fontFamily = FontFamily.Serif) },
+            text = { Text("Aura puts everything this turn changed back to how it was before: GitHub branches move back (the current state is kept in an aura-backup branch) and files in your codespace are restored.", color = A.dim, fontSize = 14.sp, lineHeight = 20.sp) },
+            confirmButton = { TextButton({ vm.restoreTurn(t); confirmTurn = null }) { Text("Restore", color = A.accent) } },
+            dismissButton = { TextButton({ confirmTurn = null }) { Text("Cancel", color = A.dim) } },
+        )
     }
 }
 
 @Composable
-private fun MessageItem(m: MessageEntity, live: State<Map<String, String>>) {
+private fun MessageItem(m: MessageEntity, live: State<Map<String, String>>, restoreCount: Int?, onRestore: () -> Unit) {
     when (m.role) {
         "user" -> UserBubble(m.content)
         "assistant" -> {
             val streaming = live.value[m.id]
             val text = streaming ?: m.content
             if (text.isBlank()) return
-            if (m.isError) ErrorRow(text) else AssistantText(text, showActions = streaming == null)
+            if (m.isError) ErrorRow(text) else AssistantText(text, showActions = streaming == null, restoreCount = restoreCount, onRestore = onRestore)
         }
-        else -> ToolStep(m)
+        "note" -> {}
+        "summary" -> SummaryRow(m.content)
+        else -> ToolStep(m, live)
+    }
+}
+
+@Composable
+private fun SummaryRow(text: String) {
+    var open by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { open = !open }.padding(vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+            Box(Modifier.weight(1f).height(1.dp).background(A.border))
+            Text("  Earlier steps compacted to save context  ", color = A.dim, fontSize = 12.sp)
+            AIcon(if (open) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right, tint = A.dim, size = 14.dp)
+            Text("  ", fontSize = 12.sp)
+            Box(Modifier.weight(1f).height(1.dp).background(A.border))
+        }
+        if (open) Text(text, color = A.dim, fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 8.dp))
     }
 }
 
@@ -189,12 +248,23 @@ private fun UserBubble(text: String) {
 }
 
 @Composable
-private fun AssistantText(text: String, showActions: Boolean) {
+private fun AssistantText(text: String, showActions: Boolean, restoreCount: Int? = null, onRestore: () -> Unit = {}) {
     val clip = LocalClipboardManager.current
     Column(Modifier.fillMaxWidth()) {
         SelectionContainer { Markdown(text) }
-        if (showActions) Row(Modifier.padding(top = 4.dp).offset(x = (-8).dp)) {
+        if (showActions) Row(Modifier.padding(top = 4.dp).offset(x = (-8).dp), verticalAlignment = Alignment.CenterVertically) {
             IconBtn(R.drawable.ic_copy, { clip.setText(AnnotatedString(text)) }, tint = A.dim, size = 36.dp)
+            if (restoreCount != null) {
+                Spacer(Modifier.width(4.dp))
+                Row(
+                    Modifier.clip(CircleShape).border(1.dp, A.border, CircleShape).clickable(onClick = onRestore).padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AIcon(R.drawable.ic_refresh, tint = A.dim, size = 16.dp)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Restore checkpoint", color = A.dim, fontSize = 13.sp)
+                }
+            }
         }
     }
 }
@@ -212,32 +282,46 @@ private fun ErrorRow(text: String) {
 }
 
 @Composable
-private fun ToolStep(m: MessageEntity) {
+private fun ToolStep(m: MessageEntity, live: State<Map<String, String>>) {
     var open by remember { mutableStateOf(false) }
+    val liveText = live.value[m.id]
+    val running = liveText != null
     val label = Tools.label(m.toolName.orEmpty())
+    val expanded = open || running
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).border(1.dp, A.border, RoundedCornerShape(14.dp))
             .clickable { open = !open }.padding(horizontal = 14.dp, vertical = 11.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            AIcon(if (m.isError) R.drawable.ic_close else R.drawable.ic_terminal, tint = if (m.isError) A.danger else A.accent, size = 18.dp)
+            if (running) CircularProgressIndicator(Modifier.size(16.dp), color = A.accent, strokeWidth = 2.dp)
+            else AIcon(if (m.isError) R.drawable.ic_close else R.drawable.ic_terminal, tint = if (m.isError) A.danger else A.accent, size = 18.dp)
             Spacer(Modifier.width(10.dp))
             Text(label, color = A.text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.weight(1f))
-            Text(if (m.isError) "Failed" else "Done", color = if (m.isError) A.danger else A.dim, fontSize = 13.sp)
+            Text(if (running) "Running" else if (m.isError) "Failed" else "Done", color = if (m.isError && !running) A.danger else A.dim, fontSize = 13.sp)
             Spacer(Modifier.width(6.dp))
-            AIcon(if (open) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right, tint = A.dim, size = 16.dp)
+            AIcon(if (expanded) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right, tint = A.dim, size = 16.dp)
         }
-        if (open) {
+        if (expanded) {
             Spacer(Modifier.height(10.dp))
             val mono = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 17.sp, color = A.dim)
-            SelectionContainer {
-                Column {
-                    if (!m.toolArgs.isNullOrBlank()) Text(m.toolArgs.take(900), style = mono)
-                    Spacer(Modifier.height(8.dp))
-                    Text(m.content.take(1800), style = mono.copy(color = A.text))
-                }
-            }
+            if (!m.toolArgs.isNullOrBlank() && !running) Text(m.toolArgs.take(600), style = mono, modifier = Modifier.padding(bottom = 8.dp))
+            Terminal(if (running) liveText.orEmpty().ifBlank { "Starting..." } else m.content, running)
+        }
+    }
+}
+
+/** Collapsed-by-default terminal block; follows the output while a command is running. */
+@Composable
+private fun Terminal(text: String, running: Boolean) {
+    val scroll = rememberScrollState()
+    LaunchedEffect(text.length, running) { if (running) scroll.scrollTo(scroll.maxValue) }
+    Box(Modifier.fillMaxWidth().heightIn(max = 240.dp).clip(RoundedCornerShape(10.dp)).background(A.code)) {
+        SelectionContainer {
+            Text(
+                text.takeLast(8000), color = A.text, fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 17.sp,
+                modifier = Modifier.verticalScroll(scroll).padding(10.dp),
+            )
         }
     }
 }

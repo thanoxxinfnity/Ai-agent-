@@ -21,11 +21,14 @@ object Tools {
             put("content", prop("string", "Full file content"))
             put("encoding", prop("string", "utf-8 (default) or base64"))
             put("executable", prop("boolean", "Set true for scripts such as gradlew"))
+            put("overwrite", prop("boolean", "Only for deliberately replacing a whole existing file. Otherwise use edit_file_diff"))
         }
         putJsonArray("required") { add("path"); add("content") }
     }
 
-    val defs: List<ToolDef> = listOf(
+    val defs: List<ToolDef> get() = baseDefs + ToolsPro.defs
+
+    private val baseDefs: List<ToolDef> = listOf(
         ToolDef(
             "use_skill", "Load the full instructions of one of the enabled skills listed in the system prompt. Call it before starting work that matches a skill.",
             schema(listOf("name"), "name" to prop("string", "Skill name")),
@@ -85,7 +88,7 @@ object Tools {
         ),
         ToolDef(
             "github_write_files",
-            "Create or update many files in ONE commit (also deletes files). This is how code is pushed. Workflow files under .github/workflows need the token's Workflows permission.",
+            "Create NEW files (or deliberately replace one) in ONE commit and delete files. Existing files must be changed with edit_file_diff, not rewritten. Workflow files under .github/workflows need the token's Workflows permission.",
             schema(
                 listOf("repo", "message", "files"),
                 "repo" to prop("string", "owner/name or just name for the signed-in user"),
@@ -97,7 +100,7 @@ object Tools {
         ),
         ToolDef(
             "github_read_file", "Read a text file from a repository.",
-            schema(listOf("repo", "path"), "repo" to prop("string", "owner/name or name"), "path" to prop("string", "File path"), "ref" to prop("string", "Branch or sha")),
+            schema(listOf("repo", "path"), "repo" to prop("string", "owner/name or name"), "path" to prop("string", "File path"), "ref" to prop("string", "Branch or sha"), "start_line" to prop("number", "Optional first line"), "end_line" to prop("number", "Optional last line")),
         ),
         ToolDef(
             "github_list_files", "List all file paths in a repository branch.",
@@ -125,7 +128,8 @@ object Tools {
     private fun JsonElement.o() = this as JsonObject
     private fun JsonElement?.s(k: String) = (this as? JsonObject)?.s(k)
 
-    suspend fun execute(store: Store, name: String, argsJson: String, cloud: com.aura.agent.agent.CloudSession? = null, outDir: java.io.File? = null): String {
+    suspend fun execute(ctx: ToolCtx, name: String, argsJson: String): String {
+        val store = ctx.store
         val a = runCatching { AppJsonLenient.parseToJsonElement(argsJson.ifBlank { "{}" }).o() }.getOrElse { return "ERROR: invalid JSON arguments" }
         if (name == "use_skill") {
             val n = a.s("name").orEmpty()
@@ -141,10 +145,12 @@ object Tools {
             store.upsertSkill(sk)
             return "Skill '${sk.name}' saved. It is now listed under Settings > Skills."
         }
-        if (name in CLOUD_TOOLS) return runCloud(name, a, cloud, outDir)
+        if (ctx.readOnly && name !in ToolsPro.READ_ONLY) return "ERROR: workers are read-only and cannot use $name."
+        if (name in ToolsPro.NAMES) return ToolsPro.run(ctx, name, a)
+        if (name in CLOUD_TOOLS) return runCloud(name, a, ctx)
         val token = store.githubToken.value
         if (token.isBlank()) return "ERROR: No GitHub token. Ask the user to add one in Settings > GitHub."
-        val gh = GitHub(token)
+        val gh = GitHub(token, ctx.app.cloudApi)
         return try {
             val me = store.githubUser.value.ifBlank { gh.login().also { store.setGithub(token, it) } }
             fun full(r: String) = if ("/" in r) r else "$me/$r"
@@ -162,12 +168,14 @@ object Tools {
                     })
                     "Created ${r.s("full_name")} - ${r.s("html_url")} (default branch ${r.s("default_branch")})"
                 }
-                "github_write_files" -> writeFiles(gh, full(a.s("repo") ?: return "ERROR: repo required"), a)
+                "github_write_files" -> writeFiles(gh, full(a.s("repo") ?: return "ERROR: repo required"), a, ctx)
                 "github_read_file" -> {
                     val ref = a.s("ref")?.let { "?ref=$it" }.orEmpty()
                     val r = gh.call("GET", "/repos/${full(a.s("repo")!!)}/contents/${a.s("path")}$ref")
                     val enc = r.s("content").orEmpty().replace("\n", "")
-                    String(Base64.getDecoder().decode(enc)).take(12000)
+                    val text = String(Base64.getDecoder().decode(enc))
+                    val st = a.n("start_line")?.toInt(); val en = a.n("end_line")?.toInt()
+                    if (st != null) ToolsPro.numbered(text, st.coerceAtLeast(1), (en ?: (st + 120)).coerceAtLeast(st)) else text.take(12000)
                 }
                 "github_list_files" -> {
                     val repo = full(a.s("repo")!!)
@@ -187,7 +195,7 @@ object Tools {
                         "id=${it.o()["id"]} ${it.s("name")} status=${it.s("status")} conclusion=${it.s("conclusion")} branch=${it.s("head_branch")} ${it.s("html_url")}"
                     }.ifBlank { "No runs yet" }
                 }
-                "github_wait_run" -> waitRun(gh, full(a.s("repo")!!), a.n("run_id") ?: return "ERROR: run_id required")
+                "github_wait_run" -> waitRun(gh, full(a.s("repo")!!), a.n("run_id") ?: return "ERROR: run_id required", ctx)
                 "github_run_logs" -> runLogs(gh, full(a.s("repo")!!), a.n("run_id") ?: return "ERROR: run_id required")
                 "github_latest_release" -> {
                     val r = gh.call("GET", "/repos/${full(a.s("repo")!!)}/releases/latest").o()
@@ -207,35 +215,61 @@ object Tools {
 
     val CLOUD_TOOLS = setOf("cloud_exec", "cloud_upload", "cloud_download", "agent_browser", "playwright_tools", "playwright_call")
 
-    private suspend fun runCloud(name: String, a: JsonObject, cloud: com.aura.agent.agent.CloudSession?, outDir: java.io.File?): String {
-        cloud ?: return "ERROR: cloud is not available here"
+    private suspend fun runCloud(name: String, a: JsonObject, ctx: ToolCtx): String {
         return try {
-            val c = cloud.client()
+            val c = ctx.cloud.client()
+            val cp = Checkpoints(ctx.app)
             when (name) {
-                "cloud_exec" -> c.exec(a.s("command") ?: return "ERROR: command required", (a.n("timeout_seconds") ?: 300L).toInt().coerceIn(5, 1800), a.s("cwd") ?: "/workspaces/aura-workspace").render()
-                "cloud_upload" -> { c.upload(a.s("path") ?: return "ERROR: path required", (a.s("content") ?: "").toByteArray()); "Uploaded ${a.s("path")}" }
+                "cloud_exec" -> {
+                    val cmd = a.s("command") ?: return "ERROR: command required"
+                    val cwd = a.s("cwd") ?: ToolsPro.WORKSPACE
+                    Guard.dangerous(cmd)?.let { reason ->
+                        if (ctx.store.guardrails.value && !ctx.approve("Dangerous command: $reason", cmd)) {
+                            return "DENIED: the user did not approve this command ($reason). Do not retry it; choose a safer approach or ask the user."
+                        }
+                    }
+                    if (Guard.mutates(cmd)) cp.recordCloud(ctx, c, cwd, "command: ${cmd.take(60)}")
+                    ctx.emit("$ $cmd\n")
+                    c.execStream(cmd, (a.n("timeout_seconds") ?: 300L).toInt().coerceIn(5, 1800), cwd, emptyMap(), ctx.emit).render()
+                }
+                "cloud_upload" -> {
+                    val path = a.s("path") ?: return "ERROR: path required"
+                    val content = a.s("content").orEmpty()
+                    Guard.looksTruncated(content)?.let { return "ERROR: the content contains a placeholder ($it). Write the complete file, or use cloud_edit_file for a small change." }
+                    cp.recordCloud(ctx, c, path.substringBeforeLast('/', ToolsPro.WORKSPACE), "upload $path")
+                    c.upload(path, content.toByteArray())
+                    ctx.state.markModified()
+                    "Uploaded $path"
+                }
                 "cloud_download" -> {
                     val path = a.s("path") ?: return "ERROR: path required"
                     val bytes = c.download(path)
-                    val dir = (outDir ?: java.io.File("cloud_out")).also { it.mkdirs() }
+                    val dir = ctx.outDir.also { it.mkdirs() }
                     val f = java.io.File(dir, path.substringAfterLast('/').ifBlank { "file" })
                     f.writeBytes(bytes)
                     val text = runCatching { String(bytes, Charsets.UTF_8).takeIf { b -> bytes.size < 6000 && b.none { it == '\u0000' } } }.getOrNull()
                     "Saved ${bytes.size} bytes to ${f.absolutePath}" + (text?.let { "\n---\n$it" } ?: "")
                 }
                 "agent_browser" -> {
-                    if (!cloud.browserReady) {
-                        val r = c.exec("command -v agent-browser >/dev/null || (npm i -g agent-browser && agent-browser install --with-deps)", 900)
+                    if (!ctx.cloud.browserReady) {
+                        ctx.emit("Preparing the browser (first use)...\n")
+                        val r = c.execStream("command -v agent-browser >/dev/null || (npm i -g agent-browser && agent-browser install --with-deps)", 900, null, emptyMap(), ctx.emit)
                         if (r.exit != 0) return "ERROR: could not install agent-browser\n" + r.render()
-                        cloud.browserReady = true
+                        ctx.cloud.browserReady = true
                     }
-                    c.exec("agent-browser " + (a.s("args") ?: return "ERROR: args required"), 180).render()
+                    val args = a.s("args") ?: return "ERROR: args required"
+                    ctx.emit("$ agent-browser $args\n")
+                    c.execStream("agent-browser $args", 180, null, emptyMap(), ctx.emit).render()
                 }
                 "playwright_tools" -> c.mcpTools()
-                else -> c.mcpCall(a.s("tool") ?: return "ERROR: tool required", (a["arguments"] as? JsonObject) ?: JsonObject(emptyMap()))
+                else -> {
+                    val tool = a.s("tool") ?: return "ERROR: tool required"
+                    ctx.emit("playwright: $tool ${(a["arguments"] as? JsonObject) ?: ""}\n")
+                    c.mcpCall(tool, (a["arguments"] as? JsonObject) ?: JsonObject(emptyMap())).also { ctx.emit(it.take(600) + "\n") }
+                }
             }
         } catch (e: com.aura.agent.agent.NoCodespaceToken) {
-            "NO_CODESPACE_TOKEN: the user has not added a GitHub Codespace token. Politely ask them to open Settings > GitHub Codespace Token (PAT) and add one, then try again."
+            ToolsPro.NO_TOKEN
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -243,12 +277,34 @@ object Tools {
         }.take(9000)
     }
 
-    private suspend fun writeFiles(gh: GitHub, repo: String, a: JsonObject): String {
+    private suspend fun writeFiles(gh: GitHub, repo: String, a: JsonObject, ctx: ToolCtx): String {
         val files = a["files"] as? JsonArray ?: return "ERROR: files required"
         val deletes = (a["delete_paths"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+        // never accept abbreviated code
+        for (f in files) {
+            val fo = f.o()
+            if (fo.s("encoding") == "base64") continue
+            Guard.looksTruncated(fo.s("content").orEmpty())?.let { return "ERROR: ${fo.s("path")} contains a placeholder ($it). Nothing was pushed. Write the complete file, or use edit_file_diff for a small change." }
+        }
         val branch = a.s("branch") ?: gh.call("GET", "/repos/$repo").s("default_branch")!!
         val parent = gh.call("GET", "/repos/$repo/git/ref/heads/$branch").o()["object"].s("sha")!!
         val baseTree = gh.call("GET", "/repos/$repo/git/commits/$parent").o()["tree"].s("sha")!!
+        // do not overwrite existing files wholesale
+        val existing = runCatching {
+            (gh.call("GET", "/repos/$repo/git/trees/$baseTree?recursive=1").o()["tree"] as JsonArray)
+                .filter { it.s("type") == "blob" }.associate { it.s("path")!! to ((it as JsonObject)["size"] as? JsonPrimitive)?.intOrNull }
+        }.getOrDefault(emptyMap())
+        for (f in files) {
+            val fo = f.o(); val path = fo.s("path") ?: continue
+            val size = existing[path]
+            if (size != null && size > 1500 && fo.b("overwrite") != true) {
+                return "ERROR: $path already exists ($size bytes). Do not rewrite whole files: use edit_file_diff with the exact lines to change. If a full replacement is really needed, set overwrite=true on that file. Nothing was pushed."
+            }
+        }
+        if (deletes.isNotEmpty() && ctx.store.guardrails.value && !ctx.approve("Delete ${deletes.size} file(s) in $repo", deletes.joinToString("\n"))) {
+            return "DENIED: the user did not approve deleting these files. Nothing was pushed."
+        }
+        Checkpoints(ctx.app).recordGithub(ctx, repo, branch, parent, "push ${files.size} file(s)")
         val entries = ArrayList<JsonObject>()
         for (f in files) {
             val fo = f.o()
@@ -272,12 +328,14 @@ object Tools {
             putJsonArray("parents") { add(parent) }
         }).s("sha")!!
         gh.call("PATCH", "/repos/$repo/git/refs/heads/$branch", buildJsonObject { put("sha", commit) })
+        ctx.state.markModified()
         return "Pushed ${files.size} file(s) and ${deletes.size} deletion(s) to $repo@$branch in commit ${commit.take(7)}"
     }
 
-    private suspend fun waitRun(gh: GitHub, repo: String, id: Long): String {
+    private suspend fun waitRun(gh: GitHub, repo: String, id: Long, ctx: ToolCtx): String {
         repeat(36) {
             val r = gh.call("GET", "/repos/$repo/actions/runs/$id").o()
+            ctx.emit("run $id: ${r.s("status")} ${r.s("conclusion").orEmpty()}\n")
             if (r.s("status") == "completed") return "Run $id finished: ${r.s("conclusion")} ${r.s("html_url")}"
             delay(10_000)
         }
@@ -306,6 +364,13 @@ object Tools {
         "agent_browser" -> "Browsing with agent-browser"
         "playwright_tools" -> "Listing browser tools"
         "playwright_call" -> "Browsing with Playwright"
+        "edit_file_diff" -> "Editing file"
+        "cloud_edit_file" -> "Editing file in codespace"
+        "verify_project" -> "Building and checking"
+        "search_code" -> "Searching code"
+        "find_files" -> "Finding files"
+        "read_lines" -> "Reading lines"
+        "delegate" -> "Research sub-agents"
         "use_skill" -> "Loading skill"
         "create_skill" -> "Saving skill"
         "github_whoami" -> "Checking GitHub account"

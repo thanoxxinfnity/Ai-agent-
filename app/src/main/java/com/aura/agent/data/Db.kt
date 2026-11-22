@@ -1,6 +1,8 @@
 package com.aura.agent.data
 
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
@@ -37,6 +39,23 @@ data class MessageEntity(
     val toolName: String? = null,
     val toolArgs: String? = null,
     val isError: Boolean = false,
+    /** True once the message has been folded into a summary; it stays visible but is no longer sent to the model. */
+    @ColumnInfo(defaultValue = "0") val compacted: Boolean = false,
+)
+
+@Entity(tableName = "checkpoints", indices = [Index("chatId"), Index("turnId")])
+data class CheckpointEntity(
+    @PrimaryKey val id: String,
+    val chatId: String,
+    val turnId: String,
+    val createdAt: Long,
+    /** "github" (branch head sha) or "cloud" (git snapshot inside the codespace) */
+    val kind: String,
+    /** github: owner/repo@branch   cloud: absolute repo path */
+    val target: String,
+    val ref: String,
+    val label: String,
+    @ColumnInfo(defaultValue = "0") val restored: Boolean = false,
 )
 
 @Dao
@@ -82,9 +101,45 @@ interface ChatDao {
 
     @Query("DELETE FROM chats WHERE id = :id")
     suspend fun deleteChat(id: String)
+
+    @Query("UPDATE messages SET compacted = 1 WHERE id IN (:ids)")
+    suspend fun markCompacted(ids: List<String>)
+
+    @Query("DELETE FROM messages WHERE chatId = :chatId AND role = 'tool' AND content = ''")
+    suspend fun deleteBlankTools(chatId: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertCheckpoint(c: CheckpointEntity)
+
+    @Query("SELECT * FROM checkpoints WHERE turnId = :turnId ORDER BY createdAt ASC")
+    suspend fun checkpointsForTurn(turnId: String): List<CheckpointEntity>
+
+    @Query("SELECT * FROM checkpoints WHERE chatId = :chatId ORDER BY createdAt ASC")
+    fun checkpoints(chatId: String): Flow<List<CheckpointEntity>>
+
+    @Query("UPDATE checkpoints SET restored = 1 WHERE turnId = :turnId")
+    suspend fun markRestored(turnId: String)
+
+    @Query("DELETE FROM checkpoints WHERE chatId = :chatId")
+    suspend fun deleteCheckpoints(chatId: String)
 }
 
-@Database(entities = [ChatEntity::class, MessageEntity::class], version = 1, exportSchema = false)
+@Database(entities = [ChatEntity::class, MessageEntity::class, CheckpointEntity::class], version = 2, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): ChatDao
+
+    companion object {
+        /** Keeps every existing chat: adds the compacted flag and the checkpoints table. */
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN compacted INTEGER NOT NULL DEFAULT 0")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS checkpoints (id TEXT NOT NULL, chatId TEXT NOT NULL, turnId TEXT NOT NULL, createdAt INTEGER NOT NULL, " +
+                        "kind TEXT NOT NULL, target TEXT NOT NULL, ref TEXT NOT NULL, label TEXT NOT NULL, restored INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(id))"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_checkpoints_chatId ON checkpoints (chatId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_checkpoints_turnId ON checkpoints (turnId)")
+            }
+        }
+    }
 }

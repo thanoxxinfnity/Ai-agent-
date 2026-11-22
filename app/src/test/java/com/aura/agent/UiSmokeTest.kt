@@ -29,7 +29,11 @@ abstract class UiBase {
         }
     }
 
-    protected fun settingsList() = rule.onNode(hasScrollAction() and hasAnyDescendant(hasText("Model providers")))
+    /** Pins the settings list by node id, so it can still be found after scrolling its first items away. */
+    protected fun settingsList(): SemanticsNodeInteraction {
+        val id = rule.onNode(hasScrollAction() and hasAnyDescendant(hasText("Model providers"))).fetchSemanticsNode().id
+        return rule.onNode(SemanticsMatcher("settings list") { it.id == id })
+    }
 
 }
 

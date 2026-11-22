@@ -38,15 +38,60 @@ class CloudClient(private val base: String, private val pat: String) {
         }
     }
 
-    suspend fun exec(cmd: String, timeoutSec: Int = 300, cwd: String? = null): ExecResult {
-        val j = json("/exec", buildJsonObject {
-            put("cmd", cmd); put("timeout", timeoutSec); cwd?.let { put("cwd", it) }
-        }, timeoutSec + 30L).jsonObject
+    private fun mask(t: String) = if (pat.length >= 8) t.replace(pat, "***") else t
+
+    /** The user's own Codespace PAT is passed as GH_TOKEN so `gh` and git inside the codespace act as that user. */
+    private fun body(cmd: String, timeoutSec: Int, cwd: String?, env: Map<String, String>) = buildJsonObject {
+        put("cmd", cmd); put("timeout", timeoutSec); cwd?.let { put("cwd", it) }
+        putJsonObject("env") { put("GH_TOKEN", pat); put("GITHUB_TOKEN", pat); env.forEach { (k, v) -> put(k, v) } }
+    }
+
+    suspend fun exec(cmd: String, timeoutSec: Int = 300, cwd: String? = null, env: Map<String, String> = emptyMap()): ExecResult {
+        val j = json("/exec", body(cmd, timeoutSec, cwd, env), timeoutSec + 30L).jsonObject
         return ExecResult(
-            j["exit"]?.jsonPrimitive?.intOrNull ?: -1, j["stdout"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-            j["stderr"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            j["exit"]?.jsonPrimitive?.intOrNull ?: -1, mask(j["stdout"]?.jsonPrimitive?.contentOrNull.orEmpty()),
+            mask(j["stderr"]?.jsonPrimitive?.contentOrNull.orEmpty()),
         )
     }
+
+    /** Runs a command and reports output as it is produced. Falls back to [exec] against an older server. */
+    suspend fun execStream(cmd: String, timeoutSec: Int = 300, cwd: String? = null, env: Map<String, String> = emptyMap(), onChunk: (String) -> Unit): ExecResult =
+        withContext(Dispatchers.IO) {
+            val req = req("/exec_stream").post(body(cmd, timeoutSec, cwd, env).toString().toRequestBody(Http.JSON)).build()
+            val call = client(timeoutSec + 30L).newCall(req)
+            val handle = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]!!.invokeOnCompletion { if (it != null) call.cancel() }
+            try {
+                call.execute().use { resp ->
+                    if (resp.code == 404) {
+                        val r = exec(cmd, timeoutSec, cwd, env)
+                        onChunk(r.render()); return@withContext r
+                    }
+                    if (!resp.isSuccessful) throw LlmError("Cloud ${resp.code}: ${resp.body?.string().orEmpty().take(300)}")
+                    val full = StringBuilder()
+                    var pending = StringBuilder()
+                    var exit = -1
+                    val src = resp.body!!.source()
+                    while (true) {
+                        val line = src.readUtf8Line() ?: break
+                        val o = runCatching { AppJsonLenient.parseToJsonElement(line) as? JsonObject }.getOrNull() ?: continue
+                        o["o"]?.jsonPrimitive?.contentOrNull?.let { chunk ->
+                            // mask first, then hold back only a tail that could still be the start of the token
+                            val masked = mask(pending.toString() + chunk)
+                            var keep = 0
+                            for (k in minOf(masked.length, pat.length - 1) downTo 1) {
+                                if (pat.startsWith(masked.substring(masked.length - k))) { keep = k; break }
+                            }
+                            val safe = masked.substring(0, masked.length - keep)
+                            pending = StringBuilder(masked.substring(masked.length - keep))
+                            if (safe.isNotEmpty()) { full.append(safe); onChunk(safe) }
+                        }
+                        o["exit"]?.jsonPrimitive?.intOrNull?.let { exit = it }
+                    }
+                    if (pending.isNotEmpty()) { val m = mask(pending.toString()); full.append(m); onChunk(m) }
+                    ExecResult(exit, full.toString(), "")
+                }
+            } finally { handle.dispose() }
+        }
 
     suspend fun download(path: String): ByteArray = withContext(Dispatchers.IO) {
         val enc = java.net.URLEncoder.encode(path, "UTF-8")

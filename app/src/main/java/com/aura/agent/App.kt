@@ -40,7 +40,7 @@ class App : Application() {
             }
             prev?.uncaughtException(t, e)
         }
-        db = Room.databaseBuilder(this, AppDb::class.java, "aura.db").fallbackToDestructiveMigration().build()
+        db = Room.databaseBuilder(this, AppDb::class.java, "aura.db").addMigrations(AppDb.MIGRATION_1_2).fallbackToDestructiveMigration().build()
         store = Store(this)
         supabase = Supabase(store)
         runner = AgentRunner(this)
@@ -49,6 +49,7 @@ class App : Application() {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CH_RUN, "Background work", NotificationManager.IMPORTANCE_LOW))
         nm.createNotificationChannel(NotificationChannel(CH_DONE, "Finished replies", NotificationManager.IMPORTANCE_DEFAULT))
+        nm.createNotificationChannel(NotificationChannel(CH_ASK, "Approval requests", NotificationManager.IMPORTANCE_HIGH))
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) { foreground = true; refreshModels(false) }
             override fun onStop(owner: LifecycleOwner) { foreground = false }
@@ -98,6 +99,22 @@ class App : Application() {
         }
     }
 
+    fun notifyApproval(chatId: String, title: String) {
+        if (foreground) return
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) return
+        val open = Intent(this, MainActivity::class.java).putExtra("chatId", chatId).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val pi = PendingIntent.getActivity(this, ("ask" + chatId).hashCode(), open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val n = NotificationCompat.Builder(this, CH_ASK).setSmallIcon(R.drawable.ic_sparkle)
+            .setContentTitle("Aura needs your approval").setContentText(title.take(120)).setContentIntent(pi).setAutoCancel(true).build()
+        getSystemService(NotificationManager::class.java).notify(("ask" + chatId).hashCode(), n)
+    }
+
+    fun clearApprovalNotification(chatId: String) {
+        getSystemService(NotificationManager::class.java).cancel(("ask" + chatId).hashCode())
+    }
+
     fun notifyDone(chatId: String, title: String, text: String) {
         if (foreground) return
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
@@ -117,5 +134,6 @@ class App : Application() {
     companion object {
         const val CH_RUN = "run"
         const val CH_DONE = "done"
+        const val CH_ASK = "ask"
     }
 }

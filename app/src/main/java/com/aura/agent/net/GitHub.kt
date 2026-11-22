@@ -17,9 +17,9 @@ class GitHub(private val token: String, private val api: String = "https://api.g
         .header("X-GitHub-Api-Version", "2022-11-28")
         .header("User-Agent", "Aura-Agent")
 
-    suspend fun call(method: String, path: String, body: JsonElement? = null): JsonElement = withContext(Dispatchers.IO) {
+    suspend fun call(method: String, path: String, body: JsonElement? = null, accept: String? = null): JsonElement = withContext(Dispatchers.IO) {
         val rb = body?.let { it.toString().toRequestBody(Http.JSON) } ?: if (method == "GET" || method == "HEAD") null else "{}".toRequestBody(Http.JSON)
-        val req = builder(path).method(method, rb).build()
+        val req = builder(path).also { if (accept != null) it.header("Accept", accept) }.method(method, rb).build()
         Http.client.newCall(req).execute().use { r ->
             val text = r.body?.string().orEmpty()
             if (!r.isSuccessful) {

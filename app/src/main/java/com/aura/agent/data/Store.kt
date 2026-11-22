@@ -71,6 +71,13 @@ class Store(ctx: Context) {
     var activeCodespace: String
         get() = s("activeCodespace"); set(v) { prefs.edit().putString("activeCodespace", v).apply() }
 
+    private val _guardrails = MutableStateFlow(prefs.getBoolean("guardrails", true))
+    val guardrails = _guardrails.asStateFlow()
+    fun setGuardrails(v: Boolean) { _guardrails.value = v; prefs.edit().putBoolean("guardrails", v).apply() }
+    private val _contextTokens = MutableStateFlow(prefs.getInt("contextTokens", 128_000))
+    val contextTokens = _contextTokens.asStateFlow()
+    fun setContextTokens(v: Int) { _contextTokens.value = v; prefs.edit().putInt("contextTokens", v).apply() }
+
     private val _theme = MutableStateFlow(s("theme", "system"))
     val theme = _theme.asStateFlow()
     private val _supaUrl = MutableStateFlow(s("supaUrl", BuildConfig.SUPABASE_URL))

@@ -32,6 +32,10 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     val chats = dao.chats().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val messages = currentId.flatMapLatest { id -> if (id == null) flowOf(emptyList()) else dao.messages(id) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    /** turnId -> number of unrestored checkpoints, for the current chat */
+    val checkpointTurns = currentId.flatMapLatest { id -> if (id == null) flowOf(emptyList()) else dao.checkpoints(id) }
+        .map { list -> list.filter { !it.restored }.groupBy { it.turnId }.mapValues { it.value.size } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
     val running = combine(runner.active, currentId) { act, id -> id != null && id in act }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
@@ -60,6 +64,12 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
             runner.start(id)
             AgentService.start(app)
         }
+    }
+
+    fun restoreTurn(turnId: String) {
+        val id = currentId.value ?: return
+        runner.restoreTurn(id, turnId)
+        AgentService.start(app)
     }
 
     fun stop() { currentId.value?.let { runner.stop(it) } }

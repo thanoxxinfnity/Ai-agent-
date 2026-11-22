@@ -326,6 +326,35 @@ fun SettingsScreen(vm: MainVM) {
             item { Section("GitHub") { GithubSignIn(vm) } }
             item { Section("GitHub Codespace Token (PAT)") { CodespaceToken(vm) } }
             item {
+                val guard by vm.store.guardrails.collectAsState()
+                val ctxTokens by vm.store.contextTokens.collectAsState()
+                Section("Agent safety and memory") {
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(A.surface).border(1.dp, A.border, RoundedCornerShape(16.dp)).padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Ask before dangerous commands", color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                            Text("rm -rf, database drops, force pushes, production deploys and file deletes", color = A.dim, fontSize = 13.sp, lineHeight = 18.sp)
+                        }
+                        Switch(
+                            checked = guard, onCheckedChange = { vm.store.setGuardrails(it) },
+                            colors = SwitchDefaults.colors(checkedTrackColor = A.accent, checkedThumbColor = A.onAccent, uncheckedTrackColor = A.border, uncheckedThumbColor = A.dim, uncheckedBorderColor = Color.Transparent),
+                        )
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    Text("Context window of your model", color = A.dim, fontSize = 12.sp, modifier = Modifier.padding(bottom = 6.dp, start = 2.dp))
+                    Segmented(
+                        listOf("32000" to "32k", "64000" to "64k", "128000" to "128k", "200000" to "200k", "1000000" to "1M"),
+                        ctxTokens.toString(),
+                    ) { vm.store.setContextTokens(it.toInt()) }
+                    Text(
+                        "At about 75% Aura summarises older steps automatically so long sessions never hit the token limit. Every turn that changes files also gets a checkpoint you can restore.",
+                        color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 10.dp),
+                    )
+                }
+            }
+            item {
                 Section("Appearance") {
                     Segmented(listOf("system" to "System", "light" to "Light", "dark" to "Dark"), theme) { vm.store.setTheme(it) }
                 }

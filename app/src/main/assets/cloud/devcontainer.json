@@ -8,6 +8,6 @@
   },
   "forwardPorts": [8787],
   "portsAttributes": { "8787": { "label": "Aura exec", "onAutoForward": "silent" } },
-  "postCreateCommand": "npm i -g agent-browser @playwright/mcp && (agent-browser install --with-deps || true) && (npx -y playwright install --with-deps chromium || true)",
+  "postCreateCommand": "(sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep) ; npm i -g agent-browser @playwright/mcp && (agent-browser install --with-deps || true) && (npx -y playwright install --with-deps chromium || true)",
   "postStartCommand": "nohup python3 .aura/exec_server.py > /tmp/aura-exec.log 2>&1 &"
 }

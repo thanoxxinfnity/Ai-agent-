@@ -5,6 +5,8 @@ import com.aura.agent.net.CloudClient
 import com.aura.agent.net.Codespaces
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 class NoCodespaceToken : Exception("NO_CODESPACE_TOKEN")
@@ -28,8 +30,10 @@ class CloudSession(
 
     val isOpen get() = name != null
 
-    suspend fun client(): CloudClient {
-        client?.let { return it }
+    private val mutex = Mutex()
+
+    suspend fun client(): CloudClient = mutex.withLock {
+        client?.let { return@withLock it }
         val pat = patProvider()?.takeIf { it.isNotBlank() } ?: throw NoCodespaceToken()
         val c = Codespaces(pat, api, portUrl, pollMs)
         cs = c
@@ -40,7 +44,7 @@ class CloudSession(
         val cl = c.client(n)
         c.waitHealthy(cl)
         client = cl
-        return cl
+        cl
     }
 
     /** Idempotent. Retries because a failed stop would waste the user's free core-hours. */

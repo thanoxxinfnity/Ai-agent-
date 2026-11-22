@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.*
 import java.util.concurrent.ConcurrentHashMap
 
+class Approval(val id: String, val chatId: String, val title: String, val detail: String)
+
 class AgentRunner(private val app: App) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val jobs = ConcurrentHashMap<String, Job>()
@@ -21,6 +23,8 @@ class AgentRunner(private val app: App) {
     val live = MutableStateFlow<Map<String, String>>(emptyMap())
     val status = MutableStateFlow("")
     private val userStopped = ConcurrentHashMap.newKeySet<String>()
+    private val subAgents = SubAgents(app)
+    val checkpoints = Checkpoints(app)
 
     fun isActive(chatId: String) = jobs[chatId]?.isActive == true
 
@@ -57,8 +61,22 @@ class AgentRunner(private val app: App) {
 
     private suspend fun runInner(chatId: String, cloud: CloudSession) {
         dao.setRunning(chatId, true, Ids.now())
+        dao.deleteBlankTools(chatId)   // tool calls cut short by a process death are executed again
         var failed: String? = null
         var assistantId: String? = null
+        val turnId = dao.messagesOnce(chatId).lastOrNull { it.role == "user" }?.id ?: chatId
+        val state = RunState()
+        val outDir = java.io.File(app.filesDir, "cloud_out")
+        fun mk(emit: (String) -> Unit): ToolCtx {
+            val ref = arrayOfNulls<ToolCtx>(1)
+            val c = ToolCtx(
+                app, chatId, turnId, cloud, outDir, state, emit,
+                approve = { t, d -> askApproval(chatId, t, d) },
+                subAgents = { tasks -> subAgents.run(tasks, ref[0]!!) },
+            )
+            ref[0] = c
+            return c
+        }
         try {
             repeat(MAX_STEPS) {
                 val msgs = dao.messagesOnce(chatId)
@@ -67,13 +85,21 @@ class AgentRunner(private val app: App) {
                 val history = dao.messagesOnce(chatId)
                 val pending = pendingCalls(history)
                 if (pending.isNotEmpty()) {
-                    for (c in pending) execTool(chatId, c, cloud)
+                    for (c in pending) execTool(chatId, c, ::mk)
                     return@repeat
                 }
                 val last = history.lastOrNull() ?: return@repeat
                 if (last.role == "assistant") return finish(chatId, null)
-                val calls = generate(chatId, history) { assistantId = it }
-                if (calls.isEmpty()) return finish(chatId, null)
+                maybeCompact(chatId, force = false)
+                val calls = generateWithRetry(chatId) { assistantId = it }
+                if (calls.isEmpty()) {
+                    if (needsVerify(state)) {
+                        state.nudges++
+                        dao.upsertMessage(MessageEntity(Ids.id(), chatId, "note", NUDGE, Ids.now()))
+                        return@repeat
+                    }
+                    return finish(chatId, null)
+                }
             }
             failed = "Stopped after $MAX_STEPS steps. Send a message to continue."
         } catch (e: CancellationException) {
@@ -85,6 +111,61 @@ class AgentRunner(private val app: App) {
             failed = e.message ?: e.javaClass.simpleName
         }
         finish(chatId, failed)
+    }
+
+    private fun needsVerify(s: RunState) =
+        s.modified && !s.verified && s.nudges < 2 && s.verifyFailures < ToolsPro.MAX_VERIFY && store.codespacePat.value.isNotBlank()
+
+    // ------------------------------------------------------------ approvals
+
+    val approval = MutableStateFlow<Approval?>(null)
+    private var approvalDeferred: CompletableDeferred<Boolean>? = null
+    private val approvalMutex = kotlinx.coroutines.sync.Mutex()
+
+    /** Suspends until the user approves or denies in the UI (or 10 minutes pass, which counts as deny). */
+    suspend fun askApproval(chatId: String, title: String, detail: String): Boolean = approvalMutex.withLock0 {
+        val d = CompletableDeferred<Boolean>()
+        approvalDeferred = d
+        approval.value = Approval(Ids.id(), chatId, title, detail)
+        val before = status.value
+        status.value = "Waiting for your approval"
+        app.notifyApproval(chatId, title)
+        try {
+            withTimeoutOrNull(10 * 60_000L) { d.await() } ?: false
+        } finally {
+            approval.value = null; approvalDeferred = null; status.value = before
+            app.clearApprovalNotification(chatId)
+        }
+    }
+
+    fun resolveApproval(id: String, ok: Boolean) {
+        if (approval.value?.id == id) approvalDeferred?.complete(ok)
+    }
+
+    private suspend inline fun <T> kotlinx.coroutines.sync.Mutex.withLock0(crossinline block: suspend () -> T): T {
+        lock()
+        try { return block() } finally { unlock() }
+    }
+
+    // ------------------------------------------------------------ checkpoints
+
+    /** Undo one agent turn: GitHub branches and codespace files go back to how they were before it. */
+    fun restoreTurn(chatId: String, turnId: String) {
+        active.update { it + chatId }
+        scope.launch {
+            val cloud = app.newCloudSession()
+            try {
+                status.value = "Restoring checkpoint"
+                val report = checkpoints.restoreTurn(turnId, cloud)
+                dao.upsertMessage(MessageEntity(Ids.id(), chatId, "assistant", "Checkpoint restored. The changes from that turn were undone.\n\n$report", Ids.now()))
+            } catch (e: Exception) {
+                dao.upsertMessage(MessageEntity(Ids.id(), chatId, "assistant", "Could not restore the checkpoint: ${e.message}", Ids.now(), isError = true))
+            } finally {
+                cloud.stop()
+                active.update { it - chatId }
+                if (active.value.isEmpty()) status.value = ""
+            }
+        }
     }
 
     private suspend fun flushPartial(id: String?) {
@@ -136,32 +217,66 @@ class AgentRunner(private val app: App) {
         buildJsonObject { put("id", it.id); put("name", it.name); put("args", it.args) }
     }).toString()
 
-    private suspend fun execTool(chatId: String, c: ToolCall, cloud: CloudSession) {
+    private suspend fun execTool(chatId: String, c: ToolCall, mk: ((String) -> Unit) -> ToolCtx) {
         status.value = Tools.label(c.name)
-        val result = Tools.execute(store, c.name, c.args, cloud, java.io.File(app.filesDir, "cloud_out"))
-        dao.upsertMessage(
-            MessageEntity(
-                Ids.id(), chatId, "tool", result, Ids.now(),
-                toolCallId = c.id, toolName = c.name, toolArgs = c.args, isError = result.startsWith("ERROR"),
-            )
-        )
+        val msgId = Ids.id()
+        val placeholder = MessageEntity(msgId, chatId, "tool", "", Ids.now(), toolCallId = c.id, toolName = c.name, toolArgs = c.args)
+        dao.upsertMessage(placeholder)
+        val sb = StringBuilder()
+        var lastEmit = 0L
+        live.update { it + (msgId to "") }
+        val emit = { s: String ->
+            synchronized(sb) {
+                sb.append(s)
+                if (sb.length > 40_000) sb.delete(0, sb.length - 30_000)
+                val now = System.currentTimeMillis()
+                if (now - lastEmit > 80) { lastEmit = now; live.update { it + (msgId to sb.toString()) } }
+            }
+        }
+        val result = try {
+            Tools.execute(mk(emit), c.name, c.args)
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) {
+                dao.upsertMessage(placeholder.copy(content = "Stopped by the user before this finished.", isError = true))
+                live.update { it - msgId }
+            }
+            throw e
+        }
+        val bad = result.startsWith("ERROR") || result.startsWith("DENIED") || result.startsWith("VERIFY FAIL")
+        dao.upsertMessage(placeholder.copy(content = result.ifBlank { "(no output)" }, isError = bad))
+        live.update { it - msgId }
     }
 
-    private suspend fun generate(chatId: String, history: List<MessageEntity>, onId: (String) -> Unit): List<ToolCall> {
+    private suspend fun generateWithRetry(chatId: String, onId: (String) -> Unit): List<ToolCall> {
+        return try {
+            generate(chatId, onId)
+        } catch (e: LlmError) {
+            if (!Sh.looksLikeContextOverflow(e.message.orEmpty())) throw e
+            maybeCompact(chatId, force = true)   // the model said the prompt is too long: compact now and retry once
+            generate(chatId, onId)
+        }
+    }
+
+    private suspend fun generate(chatId: String, onId: (String) -> Unit): List<ToolCall> {
         val (provider, model) = store.current()
             ?: throw LlmError("No model selected. Open Settings, add a provider and pick a model.")
         status.value = "Thinking"
-        val llm = toLlm(history)
+        val llm = toLlm(dao.messagesOnce(chatId))
         val id = Ids.id()
         onId(id)
         val placeholder = MessageEntity(id, chatId, "assistant", "", Ids.now())
         dao.upsertMessage(placeholder)
         val sb = StringBuilder()
         var lastEmit = 0L
-        val calls = Llm.stream(provider, model, systemPrompt(), llm, Tools.defs) { chunk ->
-            sb.append(chunk)
-            val now = System.currentTimeMillis()
-            if (now - lastEmit > 40) { lastEmit = now; live.update { it + (id to sb.toString()) } }
+        val calls = try {
+            Llm.stream(provider, model, systemPrompt(), llm, Tools.defs) { chunk ->
+                sb.append(chunk)
+                val now = System.currentTimeMillis()
+                if (now - lastEmit > 40) { lastEmit = now; live.update { it + (id to sb.toString()) } }
+            }
+        } catch (e: Exception) {
+            if (e !is CancellationException) { dao.deleteMessage(id); live.update { it - id } }
+            throw e
         }
         val text = sb.toString()
         val row = placeholder.copy(content = text, toolCalls = if (calls.isEmpty()) null else callsJson(calls))
@@ -174,6 +289,45 @@ class AgentRunner(private val app: App) {
         return calls
     }
 
+    // ------------------------------------------------------------ context compaction
+
+    private fun contextChars(active: List<MessageEntity>) =
+        active.sumOf { it.content.length + (it.toolCalls?.length ?: 0) } + SYSTEM.length + 3000
+
+    /** When the history reaches ~75% of the context window, older turns are folded into one summary message. */
+    suspend fun maybeCompact(chatId: String, force: Boolean) {
+        val (provider, model) = store.current() ?: return
+        val active = dao.messagesOnce(chatId).filter { !it.compacted }
+        val limit = store.contextTokens.value
+        if (!force && Tokens.estimate(contextChars(active)) < limit * 0.75) return
+        val cut = Compact.cut(active.map { it.role }, if (force) 4 else 8)
+        if (cut <= 0) return
+        val old = active.subList(0, cut)
+        status.value = "Compacting context"
+        val transcript = old.joinToString("\n") {
+            when (it.role) {
+                "user" -> "USER: ${it.content.take(1500)}"
+                "assistant" -> "ASSISTANT: ${it.content.take(1500)}" + (parseCalls(it.toolCalls).takeIf { c -> c.isNotEmpty() }?.joinToString(prefix = " [called ", postfix = "]") { c -> "${c.name} ${c.args.take(160)}" } ?: "")
+                "tool" -> "TOOL ${it.toolName}: ${it.content.take(500)}"
+                "summary" -> "PREVIOUS SUMMARY: ${it.content}"
+                else -> "NOTE: ${it.content.take(300)}"
+            }
+        }.let { if (it.length > 60_000) it.take(20_000) + "\n...[middle omitted]...\n" + it.takeLast(38_000) else it }
+        val summary = runCatching {
+            val sb = StringBuilder()
+            withTimeout(90_000) {
+                Llm.stream(
+                    provider, model, "You write precise technical summaries of an AI agent's work.",
+                    listOf(LlmMsg("user", COMPACT_PROMPT + "\n\n" + transcript)), emptyList(),
+                ) { sb.append(it) }
+            }
+            sb.toString().trim()
+        }.getOrDefault("").ifBlank { Compact.fallbackSummary(transcript.lines().filter { it.startsWith("USER") || it.startsWith("ASSISTANT") }) }
+        dao.upsertMessage(MessageEntity(Ids.id(), chatId, "summary", summary, old.last().createdAt))
+        dao.markCompacted(old.map { it.id })
+        status.value = "Thinking"
+    }
+
     private fun systemPrompt(): String {
         val skills = store.enabledSkills()
         if (skills.isEmpty()) return SYSTEM
@@ -182,14 +336,24 @@ class AgentRunner(private val app: App) {
     }
 
     private fun toLlm(history: List<MessageEntity>): List<LlmMsg> {
-        val list = history.takeLast(HISTORY_LIMIT).dropWhile { it.role == "tool" }
-        return list.map {
-            when (it.role) {
+        val active = history.filter { !it.compacted }
+        val summary = active.lastOrNull { it.role == "summary" }
+        val body = active.filter { it.role != "summary" }.takeLast(HISTORY_LIMIT).dropWhile { it.role == "tool" }
+        val recent = body.size - 10
+        val out = ArrayList<LlmMsg>()
+        if (summary != null) out += LlmMsg("user", "[Summary of the earlier conversation, kept to save context]\n" + summary.content)
+        body.forEachIndexed { i, it ->
+            out += when (it.role) {
                 "assistant" -> LlmMsg("assistant", it.content, parseCalls(it.toolCalls))
-                "tool" -> LlmMsg("tool", it.content.take(6000), toolCallId = it.toolCallId, toolName = it.toolName)
-                else -> LlmMsg("user", it.content)
+                "tool" -> LlmMsg(
+                    "tool",
+                    if (i < recent && it.content.length > 1500) it.content.take(1500) + "\n...[older output trimmed]" else it.content.take(6000),
+                    toolCallId = it.toolCallId, toolName = it.toolName,
+                )
+                else -> LlmMsg("user", it.content)   // user and hidden notes
             }
         }
+        return out
     }
 
     private suspend fun makeTitle(chatId: String) {
@@ -212,7 +376,7 @@ class AgentRunner(private val app: App) {
     }
 
     companion object {
-        const val MAX_STEPS = 30
+        const val MAX_STEPS = 50
         const val HISTORY_LIMIT = 120
 
         fun clampTitle(raw: String): String {
@@ -225,6 +389,12 @@ class AgentRunner(private val app: App) {
             return t
         }
 
+        const val NUDGE = "[auto-check] You changed files but have not run verify_project yet. If the project is in the codespace, run verify_project now, fix every error with edit_file_diff or cloud_edit_file and run it again until it prints VERIFY PASS (at most 5 attempts). If the code only exists in a GitHub repository, clone it into the codespace first with `gh repo clone owner/name` (GH_TOKEN is already set), or rely on the repository's CI run. Then give the user a short summary."
+
+        const val COMPACT_PROMPT = "Compress this agent transcript into working memory so the agent can continue seamlessly. Use these sections: " +
+            "ACTIVE FILES AND STATE (repositories, branches, file paths and what changed in each, build or CI status, run ids, URLs), DECISIONS (what was chosen and why), " +
+            "PENDING TASKS (what is still to do, in order), KEY FACTS AND ERRORS (names, versions, error messages still relevant). Be specific. Maximum 600 words. No filler."
+
         val SYSTEM = """
 You are Aura, a capable AI agent inside an Android app. You can talk casually in the user's language (Hindi, Hinglish or English) and you never use emoji.
 
@@ -235,6 +405,7 @@ You have GitHub tools that act with the user's token. When the user wants an app
 4. Start it with github_run_workflow (or it runs on push), then github_wait_run. If it fails, read github_run_logs, fix the code, push again and retry until it succeeds.
 5. Finish by giving the user the repository URL and the APK download link from github_latest_release.
 Cloud and browser: for heavy tasks (builds, tests, installs, long scripts) use cloud_exec, which runs in the user's own GitHub Codespace; fetch results with cloud_download. For anything that needs a real browser (open live sites, scrape, fill forms, test a UI, verify a deployed app) use agent_browser (CLI, good default) or playwright_tools and playwright_call (Playwright MCP). Both run headless in the codespace. The codespace is stopped automatically when your task ends, so do not try to stop it. If a cloud tool returns NO_CODESPACE_TOKEN, politely tell the user to add their GitHub Codespace token in Settings first.
+Working rules: never rewrite an existing file. Find code with search_code and find_files, read only the lines you need with read_lines, then change it with edit_file_diff (GitHub repo) or cloud_edit_file (codespace) using the exact existing text. If a tool reports a mismatch, read the lines again and retry. Never write placeholders such as "// ... rest of code". After every code change run verify_project and fix the errors it reports until it prints VERIFY PASS (at most 5 attempts). For large investigations hand focused questions to delegate so your own context stays small. Dangerous commands ask the user for approval; if you get DENIED do not retry it. Every turn is checkpointed, so the user can undo it.
 Keep replies short and clear. Use Markdown for code. If a tool returns an ERROR, explain it simply and fix what you can.
 """.trimIndent()
     }

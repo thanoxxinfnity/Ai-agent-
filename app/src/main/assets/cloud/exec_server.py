@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Aura exec server. Runs inside a GitHub Codespace on a private forwarded port (GitHub authenticates
 every request), so it needs no secret of its own. VERSION is compared by the app to decide on updates."""
-VERSION = "1"
+VERSION = "2"
 
 import base64, json, os, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -102,6 +102,14 @@ class Mcp:
 MCP = Mcp()
 
 
+def child_env(data):
+    env = dict(os.environ)
+    for k, v in (data.get("env") or {}).items():
+        if isinstance(k, str) and isinstance(v, str):
+            env[k] = v
+    return env
+
+
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -159,14 +167,49 @@ class H(BaseHTTPRequestHandler):
         except Exception as e:
             self._send(500, {"error": str(e)})
 
+    def _chunk(self, obj):
+        b = (json.dumps(obj) + "\n").encode()
+        self.wfile.write(b"%x\r\n" % len(b) + b + b"\r\n")
+        self.wfile.flush()
+
+    def _stream(self, data):
+        """Newline-delimited JSON over chunked HTTP: {"o": text} for output, then {"exit": code}."""
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        timeout = int(data.get("timeout") or 300)
+        proc = subprocess.Popen(data["cmd"], shell=True, executable="/bin/bash", cwd=data.get("cwd") or os.getcwd(),
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=child_env(data))
+        killed = []
+        timer = threading.Timer(timeout, lambda: (killed.append(1), proc.kill()))
+        timer.start()
+        try:
+            while True:
+                buf = os.read(proc.stdout.fileno(), 4096)
+                if not buf:
+                    break
+                self._chunk({"o": buf.decode("utf-8", "replace")})
+            code = proc.wait()
+        finally:
+            timer.cancel()
+        if killed:
+            self._chunk({"o": "\n[timed out]\n"})
+            code = 124
+        self._chunk({"exit": code})
+        self.wfile.write(b"0\r\n\r\n")
+        self.wfile.flush()
+
     def do_POST(self):
         u = urlparse(self.path)
         try:
             data = json.loads(self._body() or b"{}")
+            if u.path == "/exec_stream":
+                return self._stream(data)
             if u.path == "/exec":
                 cwd = data.get("cwd") or os.getcwd()
                 try:
-                    r = subprocess.run(data["cmd"], shell=True, executable="/bin/bash", cwd=cwd, capture_output=True,
+                    r = subprocess.run(data["cmd"], shell=True, executable="/bin/bash", cwd=cwd, capture_output=True, env=child_env(data),
                                        text=True, timeout=int(data.get("timeout") or 300))
                     return self._send(200, {"exit": r.returncode, "stdout": tail(r.stdout), "stderr": tail(r.stderr)})
                 except subprocess.TimeoutExpired as e:
