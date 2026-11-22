@@ -40,7 +40,7 @@ class App : Application() {
             }
             prev?.uncaughtException(t, e)
         }
-        db = Room.databaseBuilder(this, AppDb::class.java, "aura.db").addMigrations(AppDb.MIGRATION_1_2).fallbackToDestructiveMigration().build()
+        db = Room.databaseBuilder(this, AppDb::class.java, "aura.db").addMigrations(AppDb.MIGRATION_1_2, AppDb.MIGRATION_2_3).fallbackToDestructiveMigration().build()
         store = Store(this)
         supabase = Supabase(store)
         runner = AgentRunner(this)
@@ -61,8 +61,8 @@ class App : Application() {
         if (f.exists()) f.readText().also { f.delete() } else null
     }.getOrNull()
 
-    /** The signed-in user's Codespace PAT: read from their own Supabase row (RLS), falling back to the local encrypted copy. */
-    suspend fun codespacePat(): String? = supabase.getSecret("codespace_pat")?.takeIf { it.isNotBlank() } ?: store.codespacePat.value.takeIf { it.isNotBlank() }
+    /** Each user's own Codespace token lives only on their device (encrypted). Nothing secret is sent to Supabase. */
+    suspend fun codespacePat(): String? = store.codespacePat.value.takeIf { it.isNotBlank() }
 
     private fun workspaceFiles(): Map<String, String> = mapOf(
         ".devcontainer/devcontainer.json" to assets.open("cloud/devcontainer.json").bufferedReader().readText(),
@@ -77,7 +77,7 @@ class App : Application() {
     fun newCloudSession() = CloudSession(store, ::codespacePat, ::workspaceFiles, cloudApi, cloudPortUrl, cloudPollMs)
 
     private val refreshing = AtomicBoolean(false)
-    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, e -> android.util.Log.e("Aura", "background error", e) })
 
     /** Re-reads every provider's model list so new or removed models show up without manual work. */
     fun refreshModels(force: Boolean) {

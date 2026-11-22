@@ -48,6 +48,8 @@ class Mock {
                 log += r.method + " " + p
                 bodies += (r.method + " " + p) to body
                 return when {
+                    p.startsWith("/v1/responses") -> { mainRequests += body; MockResponse().setHeader("Content-Type", "text/event-stream").setBody("data: {\"type\":\"response.output_text.delta\",\"delta\":\"responses ok\"}\n\ndata: {\"type\":\"response.completed\"}\n\n") }
+                    p.startsWith("/gh/repos/octo/r/contents/uploads/") || p.startsWith("/gh/repos/octo/r/contents/data.bin") -> if (r.method == "GET") json("{}", 404) else json("{}", 201)
                     p.startsWith("/v1/chat/completions") -> when {
                         body.contains("research worker") -> if (body.contains("\"role\":\"tool\"")) text("Worker summary: found it in src/A.kt line 3") else if (body.contains("TREE")) tool("find_files", "{\"glob\":\"**/*.kt\",\"repo\":\"r\"}") else text("Worker summary: quick answer")
                         body.contains("Compress this agent transcript") -> text("SUMMARY-OF-OLD-WORK: repo octo/r, file src/A.kt, pending: finish login")

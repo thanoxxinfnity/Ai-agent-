@@ -13,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
@@ -37,7 +38,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun Field(
     label: String, value: String, onChange: (String) -> Unit, modifier: Modifier = Modifier,
-    placeholder: String = "", secret: Boolean = false, singleLine: Boolean = true, minLines: Int = 1, mono: Boolean = false,
+    placeholder: String = "", secret: Boolean = false, singleLine: Boolean = true, minLines: Int = 1, mono: Boolean = false, tag: String? = null,
 ) {
     var show by remember { mutableStateOf(false) }
     Column(modifier.fillMaxWidth()) {
@@ -50,7 +51,7 @@ fun Field(
             Box(Modifier.weight(1f).padding(vertical = 9.dp)) {
                 if (value.isEmpty()) Text(placeholder, color = A.dim.copy(alpha = 0.7f), fontSize = 15.sp)
                 BasicTextField(
-                    value, onChange, singleLine = singleLine, minLines = minLines, modifier = Modifier.fillMaxWidth(),
+                    value, onChange, singleLine = singleLine, minLines = minLines, modifier = Modifier.fillMaxWidth().then(if (tag != null) Modifier.testTag(tag) else Modifier),
                     textStyle = TextStyle(color = A.text, fontSize = 15.sp, fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default),
                     cursorBrush = SolidColor(A.accent),
                     visualTransformation = if (secret && !show) PasswordVisualTransformation() else VisualTransformation.None,
@@ -195,7 +196,7 @@ fun CodespaceToken(vm: MainVM) {
         if (error.isNotBlank()) Text(error, color = A.danger, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 8.dp))
     }
     Text(
-        "Your token is stored only under your own account (protected by row-level security) and is used to run heavy tasks and a headless browser in your own Codespace. It is stopped automatically after every task.",
+        "Your token is stored only on this device (encrypted) and is never uploaded. It is used to run heavy tasks and a headless browser in your own Codespace, which is stopped automatically after every task.",
         color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 12.dp),
     )
 }
@@ -338,7 +339,7 @@ fun SettingsScreen(vm: MainVM) {
                             Text("rm -rf, database drops, force pushes, production deploys and file deletes", color = A.dim, fontSize = 13.sp, lineHeight = 18.sp)
                         }
                         Switch(
-                            checked = guard, onCheckedChange = { vm.store.setGuardrails(it) },
+                            checked = guard, onCheckedChange = { vm.store.setGuardrails(it); vm.runner.alwaysApprove.clear() },
                             colors = SwitchDefaults.colors(checkedTrackColor = A.accent, checkedThumbColor = A.onAccent, uncheckedTrackColor = A.border, uncheckedThumbColor = A.dim, uncheckedBorderColor = Color.Transparent),
                         )
                     }

@@ -97,12 +97,14 @@ class MigrationTest {
         raw.version = 1
         raw.close()
         // strict: no destructive fallback, so a schema mismatch would crash here exactly as it would for users
-        val db = Room.databaseBuilder(ctx, AppDb::class.java, "migrate-test.db").addMigrations(AppDb.MIGRATION_1_2).allowMainThreadQueries().build()
+        val db = Room.databaseBuilder(ctx, AppDb::class.java, "migrate-test.db").addMigrations(AppDb.MIGRATION_1_2, AppDb.MIGRATION_2_3).allowMainThreadQueries().build()
         val dao = db.dao()
         val msgs = runBlocking { dao.messagesOnce("old1") }
         assertEquals("hello from v1", msgs.single().content)
         assertFalse(msgs.single().compacted)
         assertEquals("My old chat", runBlocking { dao.chat("old1") }!!.title)
+        assertEquals("", runBlocking { dao.chat("old1") }!!.repo)
+        assertNull(msgs.single().attachments)
         runBlocking {
             dao.upsertCheckpoint(CheckpointEntity("k", "old1", "t", 1, "github", "o/r@main", "sha", "x"))
             dao.markCompacted(listOf("m1"))

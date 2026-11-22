@@ -26,12 +26,16 @@ object Http {
 class LlmError(msg: String) : Exception(msg)
 
 data class ToolCall(val id: String, val name: String, val args: String)
+/** An image sent to a vision model, already downscaled. */
+class ImagePart(val mime: String, val base64: String) { val dataUrl get() = "data:$mime;base64,$base64" }
+
 data class LlmMsg(
     val role: String,
     val content: String,
     val toolCalls: List<ToolCall> = emptyList(),
     val toolCallId: String? = null,
     val toolName: String? = null,
+    val images: List<ImagePart> = emptyList(),
 )
 class ToolDef(val name: String, val description: String, val params: JsonObject)
 
@@ -82,34 +86,67 @@ object Llm {
         val req = Request.Builder().url(url)
             .post(body.toString().toRequestBody(Http.JSON))
             .header("Accept", "text/event-stream").auth(p).build()
-        val call = Http.client.newCall(req)
-        val handle = coroutineContext[Job]!!.invokeOnCompletion { if (it != null) call.cancel() }
-        try {
-            call.execute().use { resp ->
-                if (!resp.isSuccessful) throw LlmError("HTTP ${resp.code}: ${resp.body?.string().orEmpty().take(500)}")
-                val ct = resp.headers["Content-Type"].orEmpty()
-                val acc = Acc(onText)
-                if (ct.contains("event-stream")) {
-                    val src = resp.body!!.source()
-                    while (true) {
-                        val line = src.readUtf8Line() ?: break
-                        if (!line.startsWith("data:")) continue
-                        val data = line.substring(5).trim()
-                        if (data == "[DONE]") break
-                        if (data.isEmpty()) continue
-                        val obj = runCatching { AppJsonLenient.parseToJsonElement(data) as? JsonObject }.getOrNull() ?: continue
-                        if (responses) acc.responsesEvent(obj) else acc.chatChunk(obj)
-                    }
-                } else {
-                    val obj = AppJsonLenient.parseToJsonElement(resp.body!!.string()) as? JsonObject
-                        ?: throw LlmError("Unexpected response")
-                    if (responses) acc.responsesFull(obj) else acc.chatChunk(obj)
+        val job = coroutineContext[Job]!!
+        var attempt = 0
+        var result: List<ToolCall>? = null
+        while (result == null) {
+            val call = Http.client.newCall(req)
+            val handle = job.invokeOnCompletion { if (it != null) call.cancel() }
+            try {
+                result = call.execute().use { resp ->
+                    if (!resp.isSuccessful) {
+                        val code = resp.code
+                        val errBody = resp.body?.string().orEmpty()
+                        if (code in RETRYABLE && attempt < 2) {
+                            val wait = (resp.header("Retry-After")?.toLongOrNull() ?: (2L shl attempt)).coerceIn(1, 20)
+                            attempt++
+                            kotlinx.coroutines.delay(wait * 1000)
+                            null
+                        } else throw LlmError(friendly(code, errBody))
+                    } else readResponse(resp, responses, onText)
                 }
-                acc.result()
+            } finally {
+                handle.dispose()
             }
-        } finally {
-            handle.dispose()
         }
+        result
+    }
+
+    private val RETRYABLE = setOf(408, 429, 500, 502, 503, 504)
+
+    /** Short, readable explanation instead of a raw HTTP dump. */
+    fun friendly(code: Int, body: String): String {
+        val b = body.lowercase()
+        return when {
+            "client_not_allowed" in b || (code == 403 && "permission_error" in b) ->
+                "This provider blocks chat apps like Aura (it only allows its own approved coding clients). The key is fine, but the provider refuses this app. Use a provider that allows API access, such as Gemini or NVIDIA."
+            code == 401 -> "The provider rejected the API key (401). Check the key in Settings > provider."
+            code == 429 -> "The provider is rate limiting requests (429). Wait a moment and try again."
+            code in 500..599 -> "The provider had a problem (HTTP $code). Try again shortly."
+            else -> "HTTP $code: ${body.take(400)}"
+        }
+    }
+
+    private fun readResponse(resp: okhttp3.Response, responses: Boolean, onText: (String) -> Unit): List<ToolCall> {
+        val ct = resp.headers["Content-Type"].orEmpty()
+        val acc = Acc(onText)
+        if (ct.contains("event-stream")) {
+            val src = resp.body!!.source()
+            while (true) {
+                val line = src.readUtf8Line() ?: break
+                if (!line.startsWith("data:")) continue
+                val data = line.substring(5).trim()
+                if (data == "[DONE]") break
+                if (data.isEmpty()) continue
+                val obj = runCatching { AppJsonLenient.parseToJsonElement(data) as? JsonObject }.getOrNull() ?: continue
+                if (responses) acc.responsesEvent(obj) else acc.chatChunk(obj)
+            }
+        } else {
+            val obj = AppJsonLenient.parseToJsonElement(resp.body!!.string()) as? JsonObject
+                ?: throw LlmError("Unexpected response")
+            if (responses) acc.responsesFull(obj) else acc.chatChunk(obj)
+        }
+        return acc.result()
     }
 
     // ---------- request bodies ----------
@@ -121,7 +158,10 @@ object Llm {
             add(buildJsonObject { put("role", "system"); put("content", system) })
             for (m in msgs) add(buildJsonObject {
                 put("role", m.role)
-                put("content", m.content)
+                if (m.images.isNotEmpty()) putJsonArray("content") {
+                    add(buildJsonObject { put("type", "text"); put("text", m.content.ifBlank { "(see the attached image)" }) })
+                    m.images.forEach { im -> add(buildJsonObject { put("type", "image_url"); putJsonObject("image_url") { put("url", im.dataUrl) } }) }
+                } else put("content", m.content)
                 if (m.role == "assistant" && m.toolCalls.isNotEmpty()) putJsonArray("tool_calls") {
                     m.toolCalls.forEach { c ->
                         add(buildJsonObject {
@@ -150,7 +190,13 @@ object Llm {
         put("instructions", system)
         putJsonArray("input") {
             for (m in msgs) when (m.role) {
-                "user" -> add(buildJsonObject { put("role", "user"); put("content", m.content) })
+                "user" -> add(buildJsonObject {
+                    put("role", "user")
+                    if (m.images.isEmpty()) put("content", m.content) else putJsonArray("content") {
+                        add(buildJsonObject { put("type", "input_text"); put("text", m.content.ifBlank { "(see the attached image)" }) })
+                        m.images.forEach { im -> add(buildJsonObject { put("type", "input_image"); put("image_url", im.dataUrl) }) }
+                    }
+                })
                 "assistant" -> {
                     if (m.content.isNotBlank()) add(buildJsonObject {
                         put("role", "assistant")

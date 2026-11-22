@@ -3,6 +3,7 @@ package com.aura.agent.ui
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -22,6 +23,8 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -32,6 +35,8 @@ import com.aura.agent.R
 import com.aura.agent.MainVM
 import com.aura.agent.Route
 import com.aura.agent.agent.Tools
+import com.aura.agent.data.Attachment
+import com.aura.agent.data.Attachments
 import com.aura.agent.data.ChatEntity
 import com.aura.agent.data.MessageEntity
 import kotlinx.coroutines.launch
@@ -72,7 +77,12 @@ fun MainScreen(vm: MainVM) {
                     Text("Aura will wait for your answer. No answer in 10 minutes counts as Deny.", color = A.dim, fontSize = 12.sp)
                 }
             },
-            confirmButton = { TextButton({ vm.runner.resolveApproval(ap.id, true) }) { Text("Approve", color = A.accent) } },
+            confirmButton = {
+                Row {
+                    TextButton({ vm.runner.resolveApproval(ap.id, true, always = true) }) { Text("Always approve this session", color = A.dim) }
+                    TextButton({ vm.runner.resolveApproval(ap.id, true) }) { Text("Approve", color = A.accent) }
+                }
+            },
             dismissButton = { TextButton({ vm.runner.resolveApproval(ap.id, false) }) { Text("Deny", color = A.danger) } },
         )
     }
@@ -113,6 +123,12 @@ fun ChatHost(vm: MainVM) {
     val activeModel by vm.store.activeModel.collectAsState()
     var input by remember { mutableStateOf("") }
     var picker by remember { mutableStateOf(false) }
+    var repoPicker by remember { mutableStateOf(false) }
+    val pending by vm.pending.collectAsState()
+    val attachMsg by vm.attachMsg.collectAsState()
+    val pendingRepo by vm.pendingRepo.collectAsState()
+    val pickImages = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetMultipleContents()) { vm.attach(it) }
+    val pickFiles = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetMultipleContents()) { vm.attach(it) }
     val chat = chats.firstOrNull { it.id == currentId }
     val current = vm.store.current()
     val modelLabel = current?.second ?: "Choose model"
@@ -134,11 +150,14 @@ fun ChatHost(vm: MainVM) {
         Column(Modifier.fillMaxSize().background(A.bg).statusBarsPadding().navigationBarsPadding().imePadding()) {
             Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconBtn(R.drawable.ic_menu, { scope.launch { drawer.open() } })
-                Text(
-                    chat?.title ?: "Aura", color = A.text, fontFamily = FontFamily.Serif, fontWeight = FontWeight.Medium,
-                    fontSize = 19.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                )
+                Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
+                    Text(
+                        chat?.title ?: "Aura", color = A.text, fontFamily = FontFamily.Serif, fontWeight = FontWeight.Medium,
+                        fontSize = 19.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                    val repoLabel = if (chat != null) chat.repo else pendingRepo
+                    if (repoLabel.isNotBlank()) Text(repoLabel, color = A.dim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
                 IconBtn(R.drawable.ic_plus, { vm.openChat(null); input = "" })
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -148,14 +167,40 @@ fun ChatHost(vm: MainVM) {
                     MessageList(messages, vm)
                 }
             }
+            if (messages.isEmpty() && chat == null) {
+                Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier.clip(CircleShape).border(1.dp, A.border, CircleShape).clickable { repoPicker = true }.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AIcon(R.drawable.ic_branch, tint = if (pendingRepo.isBlank()) A.dim else A.accent, size = 16.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (pendingRepo.isBlank()) "Choose repository" else pendingRepo, color = if (pendingRepo.isBlank()) A.dim else A.text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 240.dp))
+                        Spacer(Modifier.width(4.dp))
+                        AIcon(R.drawable.ic_chevron_down, tint = A.dim, size = 14.dp)
+                    }
+                }
+            }
+            val mention = remember(input) { Regex("(?:^|\\s)@([a-z0-9-]*)$").find(input) }
+            if (mention != null) {
+                val q = mention.groupValues[1]
+                val list = remember(q) { vm.store.allSkills().filter { q.isEmpty() || it.name.contains(q, true) }.take(8) }
+                if (list.isNotEmpty()) SkillPopup(list, vm.store.skillsOff.collectAsState().value) { sk ->
+                    input = input.substring(0, mention.range.last + 1 - mention.groupValues[1].length) + sk.name + " "
+                }
+            }
+            if (attachMsg.isNotBlank()) Text(attachMsg, color = A.danger, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 20.dp).clickable { vm.attachMsg.value = "" })
             Composer(
                 value = input, onValue = { input = it }, running = running, modelLabel = modelLabel,
+                attachments = pending, onRemoveAttachment = vm::removePending,
+                onPickImages = { pickImages.launch("image/*") }, onPickFiles = { pickFiles.launch("*/*") },
                 onModel = { picker = true },
                 onSend = { vm.send(input); input = "" }, onStop = vm::stop,
             )
         }
     }
 
+    if (repoPicker) RepoPicker(vm) { repoPicker = false }
     if (picker) ModelPicker(
         providers = providers, activeProvider = activeProvider, activeModel = activeModel,
         onPick = { p, m -> vm.store.select(p, m); picker = false },
@@ -207,7 +252,7 @@ private fun MessageList(messages: List<MessageEntity>, vm: MainVM) {
 @Composable
 private fun MessageItem(m: MessageEntity, live: State<Map<String, String>>, restoreCount: Int?, onRestore: () -> Unit) {
     when (m.role) {
-        "user" -> UserBubble(m.content)
+        "user" -> UserBubble(m.content, remember(m.attachments) { Attachments.parse(m.attachments) })
         "assistant" -> {
             val streaming = live.value[m.id]
             val text = streaming ?: m.content
@@ -236,13 +281,36 @@ private fun SummaryRow(text: String) {
 }
 
 @Composable
-private fun UserBubble(text: String) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-        Box(
-            Modifier.widthIn(max = 330.dp).clip(RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp))
-                .background(A.bubble).padding(horizontal = 16.dp, vertical = 11.dp)
+private fun UserBubble(text: String, attachments: List<Attachment>) {
+    val accent = A.accent
+    val styled = remember(text, accent) {
+        androidx.compose.ui.text.buildAnnotatedString {
+            var last = 0
+            Regex("(?<![\\w@])@[a-z0-9][a-z0-9-]*").findAll(text).forEach { m ->
+                append(text.substring(last, m.range.first))
+                withStyle(androidx.compose.ui.text.SpanStyle(color = accent, fontWeight = FontWeight.Medium)) { append(m.value) }
+                last = m.range.last + 1
+            }
+            append(text.substring(last))
+        }
+    }
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (attachments.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            attachments.forEach { a ->
+                if (a.kind == "image") Thumb(a, 120.dp)
+                else Row(
+                    Modifier.clip(RoundedCornerShape(12.dp)).background(A.bubble).padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AIcon(R.drawable.ic_file, tint = A.accent, size = 18.dp); Spacer(Modifier.width(8.dp))
+                    Column { Text(a.name, color = A.text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 160.dp)); Text(Attachments.human(a.size), color = A.dim, fontSize = 11.sp) }
+                }
+            }
+        }
+        if (text.isNotBlank()) Box(
+            Modifier.widthIn(max = 330.dp).clip(RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)).background(A.bubble).padding(horizontal = 16.dp, vertical = 11.dp)
         ) {
-            SelectionContainer { Text(text, color = A.text, fontSize = 16.sp, lineHeight = 24.sp) }
+            SelectionContainer { Text(styled, color = A.text, fontSize = 16.sp, lineHeight = 24.sp) }
         }
     }
 }
@@ -389,16 +457,23 @@ private fun EmptyState(hasModel: Boolean, onSuggest: (String) -> Unit, onSetup: 
 @Composable
 private fun Composer(
     value: String, onValue: (String) -> Unit, running: Boolean, modelLabel: String,
+    attachments: List<Attachment>, onRemoveAttachment: (Attachment) -> Unit, onPickImages: () -> Unit, onPickFiles: () -> Unit,
     onModel: () -> Unit, onSend: () -> Unit, onStop: () -> Unit,
 ) {
     val shape = RoundedCornerShape(26.dp)
+    var plusMenu by remember { mutableStateOf(false) }
     Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
         Column(
             Modifier.fillMaxWidth().clip(shape).background(A.surface).border(1.dp, A.border, shape)
                 .padding(start = 18.dp, end = 10.dp, top = 14.dp, bottom = 8.dp)
         ) {
+            if (attachments.isNotEmpty()) {
+                Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    attachments.forEach { AttachmentChip(it) { onRemoveAttachment(it) } }
+                }
+            }
             Box(Modifier.fillMaxWidth()) {
-                if (value.isEmpty()) Text("Message Aura", color = A.dim, fontSize = 16.sp)
+                if (value.isEmpty()) Text("Message Aura, type @ for skills", color = A.dim, fontSize = 16.sp)
                 BasicTextField(
                     value, onValue, modifier = Modifier.fillMaxWidth().testTag("input"),
                     textStyle = TextStyle(color = A.text, fontSize = 16.sp, lineHeight = 23.sp),
@@ -406,6 +481,14 @@ private fun Composer(
                 )
             }
             Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box {
+                    IconBtn(R.drawable.ic_attach, { plusMenu = true }, tint = A.dim, size = 38.dp, modifier = Modifier.testTag("attach"))
+                    DropdownMenu(plusMenu, { plusMenu = false }) {
+                        DropdownMenuItem(text = { Text("Photos and images") }, leadingIcon = { AIcon(R.drawable.ic_image, size = 18.dp) }, onClick = { plusMenu = false; onPickImages() })
+                        DropdownMenuItem(text = { Text("Files") }, leadingIcon = { AIcon(R.drawable.ic_file, size = 18.dp) }, onClick = { plusMenu = false; onPickFiles() })
+                    }
+                }
+                Spacer(Modifier.width(4.dp))
                 Row(
                     Modifier.clip(CircleShape).border(1.dp, A.border, CircleShape).clickable(onClick = onModel)
                         .padding(start = 10.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
@@ -413,12 +496,12 @@ private fun Composer(
                 ) {
                     AIcon(R.drawable.ic_chip, tint = A.dim, size = 16.dp)
                     Spacer(Modifier.width(6.dp))
-                    Text(modelLabel, color = A.dim, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 190.dp))
+                    Text(modelLabel, color = A.dim, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 150.dp))
                     Spacer(Modifier.width(2.dp))
                     AIcon(R.drawable.ic_chevron_down, tint = A.dim, size = 14.dp)
                 }
                 Spacer(Modifier.weight(1f))
-                val ready = running || value.isNotBlank()
+                val ready = running || value.isNotBlank() || attachments.isNotEmpty()
                 Box(
                     Modifier.size(40.dp).testTag("send").clip(CircleShape)
                         .background(if (running) A.text else if (ready) A.accent else A.border)
@@ -429,6 +512,152 @@ private fun Composer(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun Thumb(a: Attachment, size: androidx.compose.ui.unit.Dp) {
+    val bmp by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, a.path) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching<androidx.compose.ui.graphics.ImageBitmap?> {
+                val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeFile(a.path, o)
+                var s = 1
+                while (o.outWidth / s > 400) s *= 2
+                android.graphics.BitmapFactory.decodeFile(a.path, android.graphics.BitmapFactory.Options().apply { inSampleSize = s })?.asImageBitmap()
+            }.getOrNull()
+        }
+    }
+    Box(Modifier.size(size).clip(RoundedCornerShape(12.dp)).background(A.bubble), contentAlignment = Alignment.Center) {
+        bmp?.let { Image(it, null, contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+            ?: AIcon(R.drawable.ic_image, tint = A.dim)
+    }
+}
+
+@Composable
+private fun AttachmentChip(a: Attachment, onRemove: () -> Unit) {
+    Box {
+        if (a.kind == "image") Thumb(a, 64.dp)
+        else Row(
+            Modifier.height(64.dp).clip(RoundedCornerShape(12.dp)).background(A.bubble).padding(start = 12.dp, end = 26.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AIcon(R.drawable.ic_file, tint = A.accent, size = 20.dp)
+            Spacer(Modifier.width(8.dp))
+            Column {
+                Text(a.name, color = A.text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 130.dp))
+                Text(Attachments.human(a.size), color = A.dim, fontSize = 11.sp)
+            }
+        }
+        Box(
+            Modifier.align(Alignment.TopEnd).padding(3.dp).size(20.dp).clip(CircleShape).background(A.text.copy(alpha = 0.75f)).clickable(onClick = onRemove),
+            contentAlignment = Alignment.Center,
+        ) { AIcon(R.drawable.ic_close, tint = A.bg, size = 12.dp) }
+    }
+}
+
+@Composable
+private fun SkillPopup(skills: List<com.aura.agent.data.Skill>, off: Set<String>, onPick: (com.aura.agent.data.Skill) -> Unit) {
+    Column(
+        Modifier.padding(horizontal = 12.dp).fillMaxWidth().heightIn(max = 260.dp).clip(RoundedCornerShape(18.dp)).background(A.surface)
+            .border(1.dp, A.border, RoundedCornerShape(18.dp)).verticalScroll(rememberScrollState()).testTag("skills"),
+    ) {
+        skills.forEach { sk ->
+            Column(Modifier.fillMaxWidth().clickable { onPick(sk) }.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("@" + sk.name, color = A.accent, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                    if (sk.id in off) Text("  off in settings, still works here", color = A.dim, fontSize = 11.sp)
+                }
+                Text(sk.description, color = A.dim, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RepoPicker(vm: MainVM, onDismiss: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val repos by vm.repos.collectAsState()
+    val state by vm.reposState.collectAsState()
+    val selected by vm.pendingRepo.collectAsState()
+    var q by remember { mutableStateOf("") }
+    var creating by remember { mutableStateOf(false) }
+    var name by remember { mutableStateOf("") }
+    var desc by remember { mutableStateOf("") }
+    var priv by remember { mutableStateOf(true) }
+    var busy by remember { mutableStateOf(false) }
+    var err by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) { vm.loadRepos() }
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = A.bg, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(Modifier.fillMaxWidth().fillMaxHeight(0.88f).padding(horizontal = 16.dp)) {
+            Text("Choose a repository", color = A.text, fontFamily = FontFamily.Serif, fontSize = 24.sp, modifier = Modifier.padding(vertical = 6.dp))
+            Text("Pick it now: it is fixed for this chat. The agent can still clone other repositories later.", color = A.dim, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(bottom = 10.dp))
+            LazyColumn(Modifier.weight(1f)) {
+                item {
+                    RepoRow("No repository", "Chat without a project", selected.isBlank(), lock = false) { vm.pendingRepo.value = ""; onDismiss() }
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { creating = !creating }.padding(horizontal = 12.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AIcon(R.drawable.ic_plus, tint = A.accent, size = 20.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Text("Create a new repository", color = A.accent, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                    }
+                    if (creating) Column(Modifier.padding(bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Field("Name", name, { name = it.replace(' ', '-') }, placeholder = "my-new-app", tag = "repo-name")
+                        Field("Description (optional)", desc, { desc = it })
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Private", color = A.text, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                            Switch(
+                                checked = priv, onCheckedChange = { priv = it },
+                                colors = SwitchDefaults.colors(checkedTrackColor = A.accent, checkedThumbColor = A.onAccent, uncheckedTrackColor = A.border, uncheckedThumbColor = A.dim, uncheckedBorderColor = androidx.compose.ui.graphics.Color.Transparent),
+                            )
+                        }
+                        PillButton("Create and use", {
+                            busy = true; err = ""
+                            scope.launch { vm.createRepo(name, desc, priv).onSuccess { onDismiss() }.onFailure { err = it.message ?: "Could not create the repository" }; busy = false }
+                        }, enabled = name.isNotBlank(), loading = busy)
+                        if (err.isNotBlank()) Text(err, color = A.danger, fontSize = 13.sp)
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 8.dp).clip(RoundedCornerShape(14.dp)).background(A.bubble).padding(horizontal = 14.dp, vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AIcon(R.drawable.ic_search, tint = A.dim, size = 18.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Box(Modifier.weight(1f)) {
+                            if (q.isEmpty()) Text("Search your repositories", color = A.dim, fontSize = 15.sp)
+                            BasicTextField(q, { q = it }, singleLine = true, textStyle = TextStyle(color = A.text, fontSize = 15.sp), cursorBrush = SolidColor(A.accent), modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                    if (state == "loading") Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(16.dp), color = A.accent, strokeWidth = 2.dp); Spacer(Modifier.width(10.dp)); Text("Loading repositories", color = A.dim, fontSize = 14.sp)
+                    } else if (state.isNotBlank()) Text(state, color = A.danger, fontSize = 13.sp, modifier = Modifier.padding(12.dp))
+                }
+                items(repos.filter { q.isBlank() || it.full.contains(q, true) }, key = { it.full }) { r ->
+                    RepoRow(r.full, r.description.ifBlank { if (r.private) "Private" else "Public" }, r.full == selected, lock = r.private) { vm.pendingRepo.value = r.full; onDismiss() }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RepoRow(title: String, sub: String, selected: Boolean, lock: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(if (selected) A.bubble else androidx.compose.ui.graphics.Color.Transparent)
+            .clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AIcon(R.drawable.ic_branch, tint = A.dim, size = 18.dp)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, color = A.text, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(sub, color = A.dim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (lock) Text("private", color = A.dim, fontSize = 11.sp, modifier = Modifier.padding(end = 6.dp))
+        if (selected) AIcon(R.drawable.ic_check, tint = A.accent, size = 20.dp)
     }
 }
 

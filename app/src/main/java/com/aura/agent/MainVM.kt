@@ -12,6 +12,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import android.net.Uri
+import kotlinx.serialization.json.put
 
 sealed interface Route {
     data object Chat : Route
@@ -45,21 +47,87 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun openChat(id: String?) { currentId.value = id; route.value = Route.Chat }
+    // ---- attachments (images and files the user adds before sending)
+    val pending = MutableStateFlow<List<Attachment>>(emptyList())
+    val attachMsg = MutableStateFlow("")
+
+    fun attach(uris: List<Uri>) {
+        viewModelScope.launch {
+            for (u in uris) {
+                if (pending.value.size >= Attachments.MAX_FILES) { attachMsg.value = "You can attach up to ${Attachments.MAX_FILES} files per message."; break }
+                Attachments.import(app, u).onSuccess { a -> pending.value = pending.value + a }.onFailure { attachMsg.value = it.message ?: "Could not read that file." }
+            }
+        }
+    }
+
+    fun removePending(a: Attachment) {
+        pending.value = pending.value - a
+        runCatching { java.io.File(a.path).delete() }
+    }
+
+    // ---- repository chosen when a chat starts
+    data class RepoInfo(val full: String, val private: Boolean, val description: String)
+    val pendingRepo = MutableStateFlow("")
+    val repos = MutableStateFlow<List<RepoInfo>>(emptyList())
+    val reposState = MutableStateFlow("")   // "", "loading", or an error message
+
+    fun loadRepos(force: Boolean = false) {
+        val token = store.githubToken.value
+        if (token.isBlank()) { reposState.value = "Sign in with GitHub to pick a repository."; return }
+        if (!force && repos.value.isNotEmpty()) return
+        reposState.value = "loading"
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val gh = GitHub(token, a.cloudApi)
+                val all = ArrayList<RepoInfo>()
+                for (page in 1..3) {
+                    val arr = gh.call("GET", "/user/repos?per_page=100&page=$page&sort=updated&affiliation=owner,collaborator,organization_member") as? kotlinx.serialization.json.JsonArray ?: break
+                    arr.forEach { e ->
+                        val o = e as kotlinx.serialization.json.JsonObject
+                        all += RepoInfo(
+                            (o["full_name"] as kotlinx.serialization.json.JsonPrimitive).content,
+                            (o["private"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "true",
+                            (o["description"] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it !is kotlinx.serialization.json.JsonNull }?.content.orEmpty(),
+                        )
+                    }
+                    if (arr.size < 100) break
+                }
+                repos.value = all; reposState.value = ""
+            } catch (e: Exception) {
+                reposState.value = e.message ?: "Could not load repositories"
+            }
+        }
+    }
+
+    suspend fun createRepo(name: String, description: String, private: Boolean): Result<String> = runCatching {
+        val token = store.githubToken.value
+        require(token.isNotBlank()) { "Sign in with GitHub first." }
+        val r = GitHub(token, a.cloudApi).call("POST", "/user/repos", kotlinx.serialization.json.buildJsonObject {
+            put("name", name.trim()); put("description", description.trim()); put("private", private); put("auto_init", true)
+        }) as kotlinx.serialization.json.JsonObject
+        val full = (r["full_name"] as kotlinx.serialization.json.JsonPrimitive).content
+        repos.value = listOf(RepoInfo(full, private, description)) + repos.value
+        pendingRepo.value = full
+        full
+    }
+
+    fun openChat(id: String?) { currentId.value = id; pendingRepo.value = ""; route.value = Route.Chat }
     fun go(r: Route) { route.value = r }
 
     fun send(text: String) {
         val t = text.trim()
-        if (t.isEmpty()) return
+        val atts = pending.value
+        if (t.isEmpty() && atts.isEmpty()) return
         viewModelScope.launch(Dispatchers.IO) {
             var id = currentId.value
             if (id == null) {
                 id = Ids.id()
-                dao.upsertChat(ChatEntity(id, "New chat", Ids.now(), Ids.now()))
+                dao.upsertChat(ChatEntity(id, "New chat", Ids.now(), Ids.now(), repo = pendingRepo.value))
                 currentId.value = id
             }
             if (runner.isActive(id)) return@launch
-            dao.upsertMessage(MessageEntity(Ids.id(), id, "user", t, Ids.now()))
+            pending.value = emptyList()
+            dao.upsertMessage(MessageEntity(Ids.id(), id, "user", t, Ids.now(), attachments = Attachments.toJson(atts)))
             dao.touch(id, Ids.now())
             runner.start(id)
             AgentService.start(app)
@@ -100,7 +168,6 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
                 val token = com.aura.agent.net.GhOAuth.poll(id, d)
                 val user = GitHub(token).login()
                 store.setGithub(token, user)
-                a.supabase.pushSecret("github_token", token)
                 loginMsg.value = ""
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -118,20 +185,15 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         val t = token.trim()
         val user = com.aura.agent.net.Codespaces.verify(t)
         store.setCodespace(t, user)
-        a.supabase.pushSecret("codespace_pat", t)
         user
     }
 
-    fun removeCodespace() {
-        store.setCodespace("", "")
-        viewModelScope.launch(Dispatchers.IO) { a.supabase.deleteSecret("codespace_pat") }
-    }
+    fun removeCodespace() { store.setCodespace("", "") }
 
     fun disconnectGithub() = store.setGithub("", "")
 
     suspend fun fetchModels(p: Provider): Result<List<String>> = runCatching { Llm.listModels(p) }
 
-    suspend fun testSupabase(): String = a.supabase.test()
 
     suspend fun addKeyless(kind: String): Result<String> = runCatching {
         val (name, base, models) = when (kind) {

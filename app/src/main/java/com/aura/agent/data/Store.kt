@@ -84,7 +84,8 @@ class Store(ctx: Context) {
     val supaUrl = _supaUrl.asStateFlow()
     private val _supaKey = MutableStateFlow(s("supaKey", BuildConfig.SUPABASE_KEY))
     val supaKey = _supaKey.asStateFlow()
-    private val _supaSync = MutableStateFlow(prefs.getBoolean("supaSync", true))
+    /** Chat backup is off: it caused needless backend traffic. Users' keys and tokens are never uploaded. */
+    private val _supaSync = MutableStateFlow(false)
     val supaSync = _supaSync.asStateFlow()
 
     private val _userSkills = MutableStateFlow(
@@ -114,6 +115,21 @@ class Store(ctx: Context) {
         get() = s("supaAccess"); set(v) { prefs.edit().putString("supaAccess", v).apply() }
     var supaRefresh: String
         get() = s("supaRefresh"); set(v) { prefs.edit().putString("supaRefresh", v).apply() }
+
+    var configFetchedAt: Long
+        get() = prefs.getLong("configFetchedAt", 0L); set(v) { prefs.edit().putLong("configFetchedAt", v).apply() }
+
+    /** test helper */
+    fun prefsReset() { prefs.edit().remove("resumeLog").apply() }
+
+    /** True when a background resume is allowed; false after 3 resumes within 5 minutes (a crash loop). */
+    fun allowResume(): Boolean {
+        val now = System.currentTimeMillis()
+        val recent = s("resumeLog").split(",").mapNotNull { it.toLongOrNull() }.filter { now - it < 5 * 60_000L }
+        if (recent.size >= 3) { prefs.edit().putString("resumeLog", recent.joinToString(",")).apply(); return false }
+        prefs.edit().putString("resumeLog", (recent + now).joinToString(",")).apply()
+        return true
+    }
 
     var modelsRefreshedAt: Long
         get() = prefs.getLong("modelsRefreshedAt", 0L); set(v) { prefs.edit().putLong("modelsRefreshedAt", v).apply() }

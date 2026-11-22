@@ -25,6 +25,9 @@ data class ChatEntity(
     val updatedAt: Long,
     val titled: Boolean = false,
     val running: Boolean = false,
+    /** owner/name chosen when the chat started (empty = none). Fixed for the life of the chat. */
+    @ColumnInfo(defaultValue = "''") val repo: String = "",
+    @ColumnInfo(defaultValue = "''") val branch: String = "",
 )
 
 @Entity(tableName = "messages", indices = [Index("chatId")])
@@ -41,6 +44,8 @@ data class MessageEntity(
     val isError: Boolean = false,
     /** True once the message has been folded into a summary; it stays visible but is no longer sent to the model. */
     @ColumnInfo(defaultValue = "0") val compacted: Boolean = false,
+    /** JSON list of attachments (images and files the user sent) */
+    val attachments: String? = null,
 )
 
 @Entity(tableName = "checkpoints", indices = [Index("chatId"), Index("turnId")])
@@ -124,11 +129,19 @@ interface ChatDao {
     suspend fun deleteCheckpoints(chatId: String)
 }
 
-@Database(entities = [ChatEntity::class, MessageEntity::class, CheckpointEntity::class], version = 2, exportSchema = false)
+@Database(entities = [ChatEntity::class, MessageEntity::class, CheckpointEntity::class], version = 3, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): ChatDao
 
     companion object {
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN attachments TEXT")
+                db.execSQL("ALTER TABLE chats ADD COLUMN repo TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE chats ADD COLUMN branch TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         /** Keeps every existing chat: adds the compacted flag and the checkpoints table. */
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {

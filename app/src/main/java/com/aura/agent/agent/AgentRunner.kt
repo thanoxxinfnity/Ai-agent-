@@ -12,7 +12,7 @@ import java.util.concurrent.ConcurrentHashMap
 class Approval(val id: String, val chatId: String, val title: String, val detail: String)
 
 class AgentRunner(private val app: App) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e -> android.util.Log.e("Aura", "agent error", e) })
     private val jobs = ConcurrentHashMap<String, Job>()
     private val dao get() = app.db.dao()
     private val store get() = app.store
@@ -44,15 +44,29 @@ class AgentRunner(private val app: App) {
     fun stopAll() = jobs.keys.toList().forEach { stop(it) }
 
     suspend fun resumeAll(): Boolean {
-        val running = dao.runningChats()
+        val running = dao.runningChats().filter { !isActive(it.id) }
+        if (running.isEmpty()) return false
+        if (!store.allowResume()) {
+            // crash-loop breaker: a run that keeps killing the app must not keep hammering the provider
+            running.forEach {
+                dao.setRunning(it.id, false, Ids.now())
+                dao.upsertMessage(MessageEntity(Ids.id(), it.id, "assistant", "Aura stopped retrying this chat because the app kept restarting. Send a message to continue.", Ids.now(), isError = true))
+            }
+            return false
+        }
         running.forEach { start(it.id) }
-        return running.isNotEmpty()
+        return true
     }
 
     private suspend fun run(chatId: String) {
         val cloud = app.newCloudSession()
         try {
             runInner(chatId, cloud)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            android.util.Log.e("Aura", "run failed", e)
+            withContext(NonCancellable) { finish(chatId, "Unexpected error: ${e.message ?: e.javaClass.simpleName}") }
         } finally {
             // strict auto-shutdown: always stop the user's codespace, also after errors, crashes and user stop
             cloud.stop()
@@ -67,12 +81,14 @@ class AgentRunner(private val app: App) {
         val turnId = dao.messagesOnce(chatId).lastOrNull { it.role == "user" }?.id ?: chatId
         val state = RunState()
         val outDir = java.io.File(app.filesDir, "cloud_out")
+        val activeRepo = dao.chat(chatId)?.repo.orEmpty()
         fun mk(emit: (String) -> Unit): ToolCtx {
             val ref = arrayOfNulls<ToolCtx>(1)
             val c = ToolCtx(
                 app, chatId, turnId, cloud, outDir, state, emit,
                 approve = { t, d -> askApproval(chatId, t, d) },
                 subAgents = { tasks -> subAgents.run(tasks, ref[0]!!) },
+                activeRepo = activeRepo,
             )
             ref[0] = c
             return c
@@ -123,7 +139,11 @@ class AgentRunner(private val app: App) {
     private val approvalMutex = kotlinx.coroutines.sync.Mutex()
 
     /** Suspends until the user approves or denies in the UI (or 10 minutes pass, which counts as deny). */
+    /** Chats the user chose "Always approve" for; lasts until the app process ends or guardrails are toggled. */
+    val alwaysApprove: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
     suspend fun askApproval(chatId: String, title: String, detail: String): Boolean = approvalMutex.withLock0 {
+        if (chatId in alwaysApprove) return@withLock0 true
         val d = CompletableDeferred<Boolean>()
         approvalDeferred = d
         approval.value = Approval(Ids.id(), chatId, title, detail)
@@ -138,8 +158,11 @@ class AgentRunner(private val app: App) {
         }
     }
 
-    fun resolveApproval(id: String, ok: Boolean) {
-        if (approval.value?.id == id) approvalDeferred?.complete(ok)
+    fun resolveApproval(id: String, ok: Boolean, always: Boolean = false) {
+        val a = approval.value ?: return
+        if (a.id != id) return
+        if (ok && always) alwaysApprove += a.chatId
+        approvalDeferred?.complete(ok)
     }
 
     private suspend inline fun <T> kotlinx.coroutines.sync.Mutex.withLock0(crossinline block: suspend () -> T): T {
@@ -233,8 +256,16 @@ class AgentRunner(private val app: App) {
                 if (now - lastEmit > 80) { lastEmit = now; live.update { it + (msgId to sb.toString()) } }
             }
         }
+        val sig = c.name + c.args
+        val seen = if (c.name in LOOP_EXEMPT) 0 else mk {}.state.callCounts.merge(sig, 1, Int::plus)!!
+        if (seen > 5) {
+            dao.upsertMessage(placeholder.copy(content = "ERROR: LOOP_DETECTED: stopped after repeating this call too many times.", isError = true))
+            live.update { it - msgId }
+            throw LlmError("Aura stopped: the agent kept repeating the same step (${Tools.label(c.name)}). Send a message with more guidance.")
+        }
         val result = try {
-            Tools.execute(mk(emit), c.name, c.args)
+            if (seen > 3) "ERROR: LOOP_DETECTED: you already made this exact call $seen times. Do something different or ask the user."
+            else Tools.execute(mk(emit), c.name, c.args)
         } catch (e: CancellationException) {
             withContext(NonCancellable) {
                 dao.upsertMessage(placeholder.copy(content = "Stopped by the user before this finished.", isError = true))
@@ -269,7 +300,7 @@ class AgentRunner(private val app: App) {
         val sb = StringBuilder()
         var lastEmit = 0L
         val calls = try {
-            Llm.stream(provider, model, systemPrompt(), llm, Tools.defs) { chunk ->
+            Llm.stream(provider, model, systemPrompt(dao.chat(chatId)?.repo.orEmpty()), llm, Tools.defs) { chunk ->
                 sb.append(chunk)
                 val now = System.currentTimeMillis()
                 if (now - lastEmit > 40) { lastEmit = now; live.update { it + (id to sb.toString()) } }
@@ -328,10 +359,11 @@ class AgentRunner(private val app: App) {
         status.value = "Thinking"
     }
 
-    private fun systemPrompt(): String {
+    private fun systemPrompt(repo: String = ""): String {
         val skills = store.enabledSkills()
-        if (skills.isEmpty()) return SYSTEM
-        return SYSTEM + "\n\nAvailable skills (call use_skill with the name to load the full instructions when the task matches):\n" +
+        val base = SYSTEM + if (repo.isNotBlank()) "\n\nActive repository for this chat: $repo. Repo tools use it by default and the codespace opens it automatically. Other repositories can be cloned with cloud_clone." else "\n\nNo repository was chosen for this chat. If the user wants code written, ask which repository to use or create one with github_create_repo."
+        if (skills.isEmpty()) return base
+        return base + "\n\nAvailable skills (call use_skill with the name to load the full instructions when the task matches):\n" +
             skills.joinToString("\n") { "- ${it.name}: ${it.description}" }
     }
 
@@ -340,6 +372,7 @@ class AgentRunner(private val app: App) {
         val summary = active.lastOrNull { it.role == "summary" }
         val body = active.filter { it.role != "summary" }.takeLast(HISTORY_LIMIT).dropWhile { it.role == "tool" }
         val recent = body.size - 10
+        val recentUsers = body.indices.filter { body[it].role == "user" }.takeLast(3).toSet()
         val out = ArrayList<LlmMsg>()
         if (summary != null) out += LlmMsg("user", "[Summary of the earlier conversation, kept to save context]\n" + summary.content)
         body.forEachIndexed { i, it ->
@@ -350,10 +383,28 @@ class AgentRunner(private val app: App) {
                     if (i < recent && it.content.length > 1500) it.content.take(1500) + "\n...[older output trimmed]" else it.content.take(6000),
                     toolCallId = it.toolCallId, toolName = it.toolName,
                 )
-                else -> LlmMsg("user", it.content)   // user and hidden notes
+                "user" -> userMsg(it, i in recentUsers)
+                else -> LlmMsg("user", it.content)   // hidden notes
             }
         }
         return out
+    }
+
+    /** Adds attached files, images and the instructions of any @skill mentioned in the text. */
+    private fun userMsg(m: MessageEntity, withImages: Boolean): LlmMsg {
+        val sb = StringBuilder(m.content)
+        val images = ArrayList<ImagePart>()
+        for (a in Attachments.parse(m.attachments)) {
+            when (a.kind) {
+                "image" -> if (withImages) Attachments.image(a)?.let { images += it } else sb.append("\n[image ${a.name} omitted from older context]")
+                "text" -> sb.append(Attachments.inlineText(a))
+                else -> sb.append(Attachments.note(a))
+            }
+        }
+        for (sk in Skills.mentioned(m.content, store.allSkills())) {
+            sb.append("\n\n[Skill @${sk.name} was requested for this message. Follow these instructions:]\n${sk.instructions}")
+        }
+        return LlmMsg("user", sb.toString(), images = images)
     }
 
     private suspend fun makeTitle(chatId: String) {
@@ -377,6 +428,7 @@ class AgentRunner(private val app: App) {
 
     companion object {
         const val MAX_STEPS = 50
+        val LOOP_EXEMPT = setOf("verify_project", "github_wait_run", "github_list_runs", "github_run_logs", "playwright_call", "agent_browser", "cloud_exec")
         const val HISTORY_LIMIT = 120
 
         fun clampTitle(raw: String): String {

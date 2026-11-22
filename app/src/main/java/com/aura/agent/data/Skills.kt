@@ -62,6 +62,20 @@ Reply in friendly Hinglish when the user writes Hinglish. Explain in small steps
 """.trimIndent(), true,
         ),
         Skill(
+            "skill-creator", "skill-creator",
+            "Create a new reusable skill from what the user describes, then save it so it can be called with @name.",
+            """
+1. Understand the job: ask at most two short questions (what should the skill do, when should it trigger). If the user already described it, do not ask.
+2. Write the skill:
+   - name: short lowercase slug with hyphens, for example release-notes.
+   - description: ONE sentence saying when to use it. This is what is shown in the skill list, so make it specific.
+   - instructions: numbered steps in Markdown. Be concrete: which tools to call, what to check, what the final answer looks like. Include rules that must never be broken. Keep it under 40 lines.
+3. Save it by calling the create_skill tool with name, description and instructions. Do not just print it.
+4. Tell the user it is saved and that they can use it any time by typing @name in the message box.
+5. If the user wants to change a skill later, call create_skill again with the same name; it replaces the old one.
+""".trimIndent(), true,
+        ),
+        Skill(
             "project-planner", "project-planner",
             "Turn a vague idea into a short plan with milestones before building.",
             """
@@ -69,6 +83,12 @@ Produce: goal in one sentence, must-have features (max 6), data model, screens o
 """.trimIndent(), true,
         ),
     )
+
+    private val mention = Regex("(?<![\\w@])@([a-z0-9][a-z0-9-]*)")
+
+    /** Skills named with @name in a message, whether or not they are switched on in Settings. */
+    fun mentioned(text: String, all: List<Skill>): List<Skill> =
+        mention.findAll(text).mapNotNull { m -> all.firstOrNull { it.name.equals(m.groupValues[1], true) } }.distinctBy { it.name }.toList()
 
     /** Parses a SKILL.md style document: optional front matter with name and description. */
     fun parse(text: String, fallbackName: String = ""): Skill? {

@@ -19,7 +19,7 @@ class SubAgents(private val app: App) {
 
     private suspend fun runOne(task: String, parent: ToolCtx): String {
         val (provider, model) = app.store.current() ?: return "ERROR: no model selected"
-        val ctx = ToolCtx(app, parent.chatId, parent.turnId, parent.cloud, parent.outDir, RunState(), readOnly = true, approve = { _, _ -> false })
+        val ctx = ToolCtx(app, parent.chatId, parent.turnId, parent.cloud, parent.outDir, RunState(), readOnly = true, approve = { _, _ -> false }, activeRepo = parent.activeRepo)
         val msgs = ArrayList<LlmMsg>().apply { add(LlmMsg("user", task)) }
         var lastText = ""
         repeat(MAX_STEPS) {

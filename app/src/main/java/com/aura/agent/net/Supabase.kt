@@ -113,6 +113,8 @@ class Supabase(private val store: Store) {
     /** Reads public app settings (such as the GitHub OAuth Client ID) from the app_config table. */
     suspend fun loadConfig() {
         if (store.supaUrl.value.isBlank() || store.supaKey.value.isBlank()) return
+        // one request a day at most, and none when the value is already known
+        if (store.githubClientId.value.isNotBlank() && System.currentTimeMillis() - store.configFetchedAt < 24 * 3600_000L) return
         runCatching {
             withContext(Dispatchers.IO) {
                 val req = Request.Builder().url(base() + "/rest/v1/app_config?select=key,value")
@@ -125,6 +127,7 @@ class Supabase(private val store: Store) {
                         val v = (o["value"] as? JsonPrimitive)?.contentOrNull ?: return@forEach
                         if ((o["key"] as? JsonPrimitive)?.contentOrNull == "github_client_id" && v.isNotBlank()) store.setGithubClientId(v)
                     }
+                    store.configFetchedAt = System.currentTimeMillis()
                 }
             }
         }

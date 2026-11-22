@@ -26,7 +26,22 @@ object Tools {
         putJsonArray("required") { add("path"); add("content") }
     }
 
-    val defs: List<ToolDef> get() = baseDefs + ToolsPro.defs
+    val defs: List<ToolDef> by lazy { (baseDefs + ToolsPro.defs).map(::relaxRepo) }
+
+    /** `repo` stops being required: it defaults to the repository chosen when the chat started. */
+    private fun relaxRepo(t: ToolDef): ToolDef {
+        val req = t.params["required"] as? JsonArray ?: return t
+        if (req.none { (it as? JsonPrimitive)?.contentOrNull == "repo" }) return t
+        return ToolDef(
+            t.name, t.description + " The repo argument is optional: it defaults to the chat's active repository.",
+            JsonObject(t.params + ("required" to JsonArray(req.filter { (it as? JsonPrimitive)?.contentOrNull != "repo" }))),
+        )
+    }
+
+    private val REPO_TOOLS = setOf(
+        "github_write_files", "github_read_file", "github_list_files", "github_run_workflow", "github_list_runs", "github_wait_run",
+        "github_run_logs", "github_latest_release", "edit_file_diff", "attachment_to_repo",
+    )
 
     private val baseDefs: List<ToolDef> = listOf(
         ToolDef(
@@ -130,7 +145,10 @@ object Tools {
 
     suspend fun execute(ctx: ToolCtx, name: String, argsJson: String): String {
         val store = ctx.store
-        val a = runCatching { AppJsonLenient.parseToJsonElement(argsJson.ifBlank { "{}" }).o() }.getOrElse { return "ERROR: invalid JSON arguments" }
+        var a = runCatching { AppJsonLenient.parseToJsonElement(argsJson.ifBlank { "{}" }).o() }.getOrElse { return "ERROR: invalid JSON arguments" }
+        if (ctx.activeRepo.isNotBlank() && a.s("repo").isNullOrBlank() &&
+            (name in REPO_TOOLS || (name in setOf("search_code", "find_files", "read_lines") && a.s("scope") == "repo"))
+        ) a = JsonObject(a + ("repo" to JsonPrimitive(ctx.activeRepo)))
         if (name == "use_skill") {
             val n = a.s("name").orEmpty()
             val sk = store.enabledSkills().firstOrNull { it.name.equals(n, true) || it.id == n }
@@ -222,7 +240,7 @@ object Tools {
             when (name) {
                 "cloud_exec" -> {
                     val cmd = a.s("command") ?: return "ERROR: command required"
-                    val cwd = a.s("cwd") ?: ToolsPro.WORKSPACE
+                    val cwd = a.s("cwd") ?: ctx.workDir(c)
                     Guard.dangerous(cmd)?.let { reason ->
                         if (ctx.store.guardrails.value && !ctx.approve("Dangerous command: $reason", cmd)) {
                             return "DENIED: the user did not approve this command ($reason). Do not retry it; choose a safer approach or ask the user."
@@ -359,6 +377,9 @@ object Tools {
     /** One-line description for the UI and notifications. */
     fun label(name: String) = when (name) {
         "cloud_exec" -> "Running in your codespace"
+        "cloud_clone" -> "Cloning repository"
+        "attachment_to_cloud" -> "Sending file to codespace"
+        "attachment_to_repo" -> "Adding file to repository"
         "cloud_upload" -> "Uploading to codespace"
         "cloud_download" -> "Fetching file from codespace"
         "agent_browser" -> "Browsing with agent-browser"
