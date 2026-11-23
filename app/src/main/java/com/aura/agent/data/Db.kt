@@ -63,6 +63,15 @@ data class CheckpointEntity(
     @ColumnInfo(defaultValue = "0") val restored: Boolean = false,
 )
 
+/** A fact, preference or project note the agent remembers in every chat. */
+@Entity(tableName = "memories")
+data class MemoryEntity(
+    @PrimaryKey val key: String,
+    val value: String,
+    val category: String,
+    val updatedAt: Long,
+)
+
 @Dao
 interface ChatDao {
     @Query("SELECT * FROM chats ORDER BY updatedAt DESC")
@@ -127,13 +136,37 @@ interface ChatDao {
 
     @Query("DELETE FROM checkpoints WHERE chatId = :chatId")
     suspend fun deleteCheckpoints(chatId: String)
+
+    @Query("SELECT * FROM memories ORDER BY updatedAt DESC")
+    fun memories(): Flow<List<MemoryEntity>>
+
+    @Query("SELECT * FROM memories ORDER BY updatedAt DESC")
+    suspend fun memoriesOnce(): List<MemoryEntity>
+
+    @Query("SELECT * FROM memories WHERE key = :key")
+    suspend fun memory(key: String): MemoryEntity?
+
+    @Query("SELECT COUNT(*) FROM memories")
+    suspend fun memoryCount(): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertMemory(m: MemoryEntity)
+
+    @Query("DELETE FROM memories WHERE key = :key")
+    suspend fun deleteMemory(key: String): Int
 }
 
-@Database(entities = [ChatEntity::class, MessageEntity::class, CheckpointEntity::class], version = 3, exportSchema = false)
+@Database(entities = [ChatEntity::class, MessageEntity::class, CheckpointEntity::class, MemoryEntity::class], version = 4, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): ChatDao
 
     companion object {
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS memories (`key` TEXT NOT NULL, value TEXT NOT NULL, category TEXT NOT NULL, updatedAt INTEGER NOT NULL, PRIMARY KEY(`key`))")
+            }
+        }
+
         val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE messages ADD COLUMN attachments TEXT")

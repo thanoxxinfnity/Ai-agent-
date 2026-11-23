@@ -295,3 +295,43 @@ object DeployFilter {
         return n.ifBlank { "aura-site" }
     }
 }
+
+object MemoryRules {
+    const val MAX_ENTRIES = 300
+    const val MAX_VALUE = 1000
+    const val PINNED_KEY = "pinned_repo"
+    val categories = listOf("fact", "preference", "project", "note")
+
+    fun normKey(k: String): String = k.trim().lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').take(60)
+
+    fun normCategory(c: String?): String {
+        val n = c?.trim()?.lowercase().orEmpty().replace(Regex("[^a-z0-9_-]+"), "")
+        return if (n.isBlank()) "note" else n.take(20)
+    }
+
+    private val secretLike = listOf(
+        Regex("""\bsk-[A-Za-z0-9_-]{16,}"""), Regex("""\bgh[pousr]_[A-Za-z0-9]{20,}"""), Regex("""\bgithub_pat_[A-Za-z0-9_]{20,}"""),
+        Regex("""\bAIza[0-9A-Za-z_-]{20,}"""), Regex("""\bAQ\.[A-Za-z0-9_-]{20,}"""), Regex("""\bxox[baprs]-[A-Za-z0-9-]{10,}"""),
+        Regex("""\b[0-9a-f]{40,}\b"""), Regex("""-----BEGIN [A-Z ]*PRIVATE KEY-----"""), Regex("""\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\."""),
+    )
+
+    /** Passwords, API keys and tokens never go into memory. */
+    fun looksSecret(text: String): Boolean = secretLike.any { it.containsMatchIn(text) }
+
+    /** The block that is added to the system prompt in every chat. Most recently changed entries come first. */
+    fun block(all: List<com.aura.agent.data.MemoryEntity>, maxEntries: Int = 40, maxChars: Int = 3000): String {
+        if (all.isEmpty()) return ""
+        val sb = StringBuilder()
+        var used = 0
+        var n = 0
+        for (m in all.sortedByDescending { it.updatedAt }) {
+            val line = "- [${m.category}] ${m.key}: ${m.value.replace('\n', ' ')}\n"
+            if (n >= maxEntries || used + line.length > maxChars) break
+            sb.append(line); used += line.length; n++
+        }
+        val more = all.size - n
+        if (more > 0) sb.append("- (+$more more saved memories: use search_memory to find them)\n")
+        return "Saved memory about the user and their projects (remembered across all chats; this is user-provided data, not instructions from the web). " +
+            "Use it naturally. When the user states a lasting fact or preference, or asks you to remember something, call save_memory; call delete_memory when they ask you to forget it. Never save secrets.\n" + sb.toString().trimEnd()
+    }
+}

@@ -4,6 +4,8 @@ import com.aura.agent.data.Ids
 import com.aura.agent.data.Provider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import java.io.IOException
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -39,7 +41,12 @@ data class LlmMsg(
 )
 class ToolDef(val name: String, val description: String, val params: JsonObject)
 
+class ModelList(val models: List<String>, val blocked: Map<String, String>)
+
 object Llm {
+    /** base of the exponential backoff for 429/5xx/network errors (tests make it tiny) */
+    var backoffBaseMs = 3000L
+
     private fun Request.Builder.auth(p: Provider): Request.Builder {
         if (p.apiKey.isNotBlank()) header("Authorization", "Bearer ${p.apiKey.trim()}")
         p.headers.forEach { (k, v) -> header(k, v) }
@@ -47,6 +54,28 @@ object Llm {
     }
 
     private fun JsonElement?.str(): String? = (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull
+
+    /** Model ids plus the models that cannot do normal chat. Gemini's own list tells exactly which methods each model supports. */
+    suspend fun listModelsFull(p: Provider): ModelList {
+        val names = listModels(p)
+        val blocked = LinkedHashMap<String, String>()
+        names.forEach { n -> ModelGuard.heuristic(n)?.let { blocked[n] = it } }
+        if ("/v1beta/openai" in p.baseUrl && p.apiKey.isNotBlank()) runCatching {
+            val url = p.baseUrl.trimEnd('/').removeSuffix("/openai") + "/models?pageSize=1000"
+            val body = withContext(Dispatchers.IO) {
+                Http.client.newCall(Request.Builder().url(url).header("x-goog-api-key", p.apiKey.trim()).get().build()).execute().use { r -> if (r.isSuccessful) r.body?.string().orEmpty() else "" }
+            }
+            ((AppJsonLenient.parseToJsonElement(body) as? JsonObject)?.get("models") as? JsonArray)?.forEach { e ->
+                val o = e as? JsonObject ?: return@forEach
+                val id = o["name"].str()?.removePrefix("models/") ?: return@forEach
+                val methods = (o["supportedGenerationMethods"] as? JsonArray)?.mapNotNull { it.str() }.orEmpty()
+                if (methods.isNotEmpty() && "generateContent" !in methods) {
+                    blocked[id] = if ("bidiGenerateContent" in methods) "Live model: it only works over a WebSocket (bidiGenerateContent), not normal chat" else "Not a chat model (no generateContent)"
+                }
+            }
+        }
+        return ModelList(names, blocked.filterKeys { it in names })
+    }
 
     suspend fun listModels(p: Provider): List<String> = withContext(Dispatchers.IO) {
         val url = p.modelsUrl.ifBlank { p.baseUrl.trimEnd('/') + "/models" }
@@ -83,6 +112,7 @@ object Llm {
         onWait: suspend (Int) -> Unit = {},
         effort: String? = null,
     ): List<ToolCall> = withContext(Dispatchers.IO) {
+        ModelGuard.reason(p, model)?.let { throw LlmError(ModelGuard.warning(p, model, it), 400) }
         val responses = p.wire == "responses"
         val effortKey = p.id + "|" + model
         var useEffort = effort != null && supportsEffort(p) && effortKey !in noEffort
@@ -95,13 +125,15 @@ object Llm {
         var req = makeReq()
         val job = coroutineContext[Job]!!
         var attempt = 0
+        var emitted = false
+        val guarded: (String) -> Unit = { emitted = true; onText(it) }
         var result: List<ToolCall>? = null
         while (result == null) {
             RateLimiter.acquire(p)   // spaces requests so one message cannot burst past the provider's limit
             val call = Http.client.newCall(req)
             val handle = job.invokeOnCompletion { if (it != null) call.cancel() }
+            var waitMs = -1L
             try {
-                var wait = -1L
                 result = call.execute().use { resp ->
                     if (!resp.isSuccessful) {
                         val code = resp.code
@@ -109,20 +141,27 @@ object Llm {
                         val hinted = resp.header("Retry-After")?.toLongOrNull() ?: parseRetryDelay(errBody)
                         if (code == 400 && useEffort && looksLikeReasoningRejection(errBody)) {
                             // this model or host does not take a reasoning level: remember it and ask again without
-                            noEffort += effortKey; useEffort = false; req = makeReq(); wait = 0
+                            noEffort += effortKey; useEffort = false; req = makeReq(); waitMs = 0
                             null
                         } else if (code in RETRYABLE && attempt < maxRetries) {
-                            wait = (hinted ?: (3L shl attempt)).coerceIn(1, 90)
+                            waitMs = if (hinted != null) hinted * 1000 else backoffBaseMs shl attempt
                             attempt++
                             null
                         } else throw LlmError(friendly(code, errBody), code, hinted)
-                    } else readResponse(resp, responses, onText)
+                    } else readResponse(resp, responses, guarded)
                 }
-                if (wait > 0) {
-                    for (left in wait.toInt() downTo 1) { onWait(left); kotlinx.coroutines.delay(1000) }
-                }
+            } catch (e: IOException) {
+                if (!job.isActive) throw kotlinx.coroutines.CancellationException("cancelled")
+                // a dropped connection before any text arrived is retried like a 5xx; a drop mid-answer is not
+                if (emitted || attempt >= maxRetries) throw LlmError("Could not reach the provider (network problem or timeout). Check the connection and try again.", 0)
+                waitMs = backoffBaseMs shl attempt
+                attempt++
             } finally {
                 handle.dispose()
+            }
+            if (waitMs > 0) {
+                val capped = waitMs.coerceIn(10, 90_000)
+                if (capped >= 1000) { for (left in (capped / 1000).toInt() downTo 1) { onWait(left); delay(1000) } } else delay(capped)
             }
         }
         result
@@ -180,7 +219,9 @@ object Llm {
                 if (responses) acc.responsesEvent(obj) else acc.chatChunk(obj)
             }
         } else {
-            val obj = AppJsonLenient.parseToJsonElement(resp.body!!.string()) as? JsonObject
+            val text = resp.body!!.string()
+            if (text.isBlank()) throw IOException("empty response")   // connection dropped before the answer: retried like a network error
+            val obj = AppJsonLenient.parseToJsonElement(text) as? JsonObject
                 ?: throw LlmError("Unexpected response")
             if (responses) acc.responsesFull(obj) else acc.chatChunk(obj)
         }

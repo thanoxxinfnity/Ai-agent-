@@ -42,6 +42,9 @@ class ToolCtx(
     val activeRepo: String = "",
     val mode: ThinkMode = ThinkMode.STEADY,
 ) {
+    /** files this call created (generated images, downloads); they appear on the tool step in the chat */
+    val produced = java.util.concurrent.CopyOnWriteArrayList<com.aura.agent.data.Attachment>()
+
     val store: Store get() = app.store
 
     /** Working directory in the codespace: the active repo (cloned on first use) or the workspace root. */

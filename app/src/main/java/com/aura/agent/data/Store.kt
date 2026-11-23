@@ -28,6 +28,8 @@ data class Provider(
     val rpm: Int = 0,
     /** "auto" sends the reasoning level only to hosts known to accept it; "on" always; "off" never */
     val reasoning: String = "auto",
+    /** model id -> why it cannot be used for normal chat (live/WebSocket only, speech, embeddings ...) */
+    val blocked: Map<String, String> = emptyMap(),
 )
 
 val AppJson = Json { ignoreUnknownKeys = true; encodeDefaults = true; isLenient = true }
@@ -111,6 +113,19 @@ class Store(ctx: Context) {
         prefs.edit().putString("vercelToken", token).putString("vercelUser", user).putString("vercelTeam", team).apply()
     }
 
+    // ---- repository that new chats start with
+    private val _pinnedRepo = MutableStateFlow(s("pinnedRepo"))
+    val pinnedRepo = _pinnedRepo.asStateFlow()
+    fun setPinnedRepo(v: String) { _pinnedRepo.value = v; prefs.edit().putString("pinnedRepo", v).apply() }
+    private val _rememberLastRepo = MutableStateFlow(prefs.getBoolean("rememberLastRepo", true))
+    val rememberLastRepo = _rememberLastRepo.asStateFlow()
+    fun setRememberLastRepo(v: Boolean) { _rememberLastRepo.value = v; prefs.edit().putBoolean("rememberLastRepo", v).apply() }
+    var lastRepo: String
+        get() = s("lastRepo"); set(v) { prefs.edit().putString("lastRepo", v).apply() }
+
+    /** The repository a new chat starts with: the pinned one, else the last one used (when that is switched on). */
+    fun defaultRepo(): String = _pinnedRepo.value.ifBlank { if (_rememberLastRepo.value) lastRepo else "" }
+
     private val _theme = MutableStateFlow(s("theme", "system"))
     val theme = _theme.asStateFlow()
     private val _supaUrl = MutableStateFlow(s("supaUrl", BuildConfig.SUPABASE_URL))
@@ -191,12 +206,12 @@ class Store(ctx: Context) {
     /** Auto mode order: the current choice first, then each other provider's default model. */
     fun candidates(): List<Pair<Provider, String>> {
         val out = ArrayList<Pair<Provider, String>>()
-        current()?.let { out += it }
+        current()?.takeIf { com.aura.agent.net.ModelGuard.reason(it.first, it.second) == null }?.let { out += it }
         for (p in _providers.value) {
-            val m = p.defaultModel.ifBlank { p.models.firstOrNull().orEmpty() }
+            val m = listOf(p.defaultModel).plus(p.models).firstOrNull { it.isNotBlank() && com.aura.agent.net.ModelGuard.reason(p, it) == null }.orEmpty()
             if (m.isNotBlank() && out.none { it.first.id == p.id }) out += p to m
         }
-        return out
+        return out.filter { com.aura.agent.net.ModelGuard.reason(it.first, it.second) == null }
     }
 
     fun select(providerId: String, model: String) {

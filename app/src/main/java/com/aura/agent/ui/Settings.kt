@@ -102,7 +102,7 @@ private fun Segmented(options: List<Pair<String, String>>, selected: String, onS
 }
 
 @Composable
-private fun TopBar(title: String, onBack: () -> Unit, trailing: @Composable () -> Unit = {}) {
+internal fun TopBar(title: String, onBack: () -> Unit, trailing: @Composable () -> Unit = {}) {
     Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         IconBtn(R.drawable.ic_back, onBack)
         Text(title, color = A.text, fontFamily = FontFamily.Serif, fontSize = 21.sp, modifier = Modifier.weight(1f).padding(start = 6.dp))
@@ -189,6 +189,24 @@ fun CodespaceToken(vm: MainVM) {
         "Your token is stored only on this device (encrypted) and is never uploaded. It is used to run heavy tasks and a headless browser in your own Codespace, which is stopped automatically after every task.",
         color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 12.dp),
     )
+}
+
+@Composable
+fun MemoryEntry(vm: MainVM) {
+    val items by vm.memories.collectAsState()
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(A.surface).border(1.dp, A.border, RoundedCornerShape(16.dp))
+            .clickable { vm.go(Route.Memory) }.padding(16.dp).testTag("memory-entry"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AIcon(R.drawable.ic_brain, tint = A.accent)
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Saved memories", color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+            Text(if (items.isEmpty()) "Nothing saved yet. Aura remembers what you ask it to." else "${items.size} saved. Tap to view, edit or delete.", color = A.dim, fontSize = 13.sp)
+        }
+        AIcon(R.drawable.ic_chevron_right, tint = A.dim, size = 20.dp)
+    }
 }
 
 @Composable
@@ -405,6 +423,7 @@ fun SettingsScreen(vm: MainVM) {
             item { Section("GitHub") { GithubSignIn(vm) } }
             item { Section("GitHub Codespace Token (PAT)") { CodespaceToken(vm) } }
             item { Section("Vercel (deploy websites)") { VercelSection(vm) } }
+            item { Section("Memory") { MemoryEntry(vm) } }
             item { Section("Voice (read aloud)") { VoiceSection(vm) } }
             item {
                 val guard by vm.store.guardrails.collectAsState()
@@ -420,6 +439,21 @@ fun SettingsScreen(vm: MainVM) {
                         }
                         Switch(
                             checked = guard, onCheckedChange = { vm.store.setGuardrails(it); vm.runner.alwaysApprove.clear() },
+                            colors = SwitchDefaults.colors(checkedTrackColor = A.accent, checkedThumbColor = A.onAccent, uncheckedTrackColor = A.border, uncheckedThumbColor = A.dim, uncheckedBorderColor = Color.Transparent),
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    val remember by vm.store.rememberLastRepo.collectAsState()
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(A.surface).border(1.dp, A.border, RoundedCornerShape(16.dp)).padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Start new chats with my last repository", color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                            Text("A pinned repository always wins. You can still change it before the first message.", color = A.dim, fontSize = 13.sp, lineHeight = 18.sp)
+                        }
+                        Switch(
+                            checked = remember, onCheckedChange = { vm.store.setRememberLastRepo(it) },
                             colors = SwitchDefaults.colors(checkedTrackColor = A.accent, checkedThumbColor = A.onAccent, uncheckedTrackColor = A.border, uncheckedThumbColor = A.dim, uncheckedBorderColor = Color.Transparent),
                         )
                     }
@@ -556,13 +590,14 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
     var manual by remember(route) { mutableStateOf("") }
     var rpm by remember(route) { mutableStateOf(existing?.rpm?.takeIf { it > 0 }?.toString() ?: "") }
     var reasoning by remember(route) { mutableStateOf(existing?.reasoning ?: "auto") }
+    var blockedMap by remember(route) { mutableStateOf(existing?.blocked ?: emptyMap()) }
 
     fun build() = Provider(
         id = existing?.id ?: Ids.id(), name = name.trim(), baseUrl = baseUrl.trim().trimEnd('/'), apiKey = apiKey.trim(), wire = wire,
         modelsUrl = modelsUrl.trim(),
         headers = headers.lines().mapNotNull { l -> l.split(":", limit = 2).takeIf { it.size == 2 && it[0].isNotBlank() }?.let { it[0].trim() to it[1].trim() } }.toMap(),
         models = models, defaultModel = defaultModel.ifBlank { models.firstOrNull().orEmpty() },
-        rpm = rpm.toIntOrNull()?.coerceIn(0, 100000) ?: 0, reasoning = reasoning,
+        rpm = rpm.toIntOrNull()?.coerceIn(0, 100000) ?: 0, reasoning = reasoning, blocked = blockedMap,
     )
     val built = remember { mutableStateOf<Provider?>(null) }
 
@@ -602,10 +637,12 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
                     PillButton(if (models.isEmpty()) "Fetch models" else "Refresh models", {
                         busy = true; error = ""
                         scope.launch {
-                            vm.fetchModels(build()).onSuccess { list ->
-                                models = list
-                                if (defaultModel.isBlank() || defaultModel !in list) defaultModel = list.firstOrNull().orEmpty()
+                            vm.fetchModels(build()).onSuccess { full ->
+                                val list = full.models
+                                models = list; blockedMap = full.blocked
+                                if (defaultModel.isBlank() || defaultModel !in list || defaultModel in full.blocked) defaultModel = list.firstOrNull { it !in full.blocked }.orEmpty()
                                 if (list.isEmpty()) error = "The endpoint returned no models. Add one manually below."
+                                else if (full.blocked.isNotEmpty()) error = "${full.blocked.size} models are greyed out: they cannot do normal chat (live, speech, embedding or image models)."
                             }.onFailure { error = it.message ?: "Could not fetch models" }
                             busy = false
                         }
@@ -617,7 +654,10 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
                         Spacer(Modifier.width(8.dp))
                         IconBtn(R.drawable.ic_plus, {
                             val m = manual.trim()
-                            if (m.isNotEmpty()) { if (m !in models) models = listOf(m) + models; if (defaultModel.isBlank()) defaultModel = m; manual = "" }
+                            if (m.isNotEmpty()) {
+                                val why = com.aura.agent.net.ModelGuard.heuristic(m)
+                                if (why != null) error = "$m cannot be used for chat: $why." else { error = ""; if (m !in models) models = listOf(m) + models; if (defaultModel.isBlank()) defaultModel = m; manual = "" }
+                            }
                         }, bg = A.bubble, modifier = Modifier.padding(top = 20.dp))
                     }
                     if (models.size > 8) {
@@ -628,12 +668,16 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
             }
             items(filtered.take(300), key = { it }) { m ->
                 val sel = m == defaultModel
+                val why = blockedMap[m] ?: com.aura.agent.net.ModelGuard.heuristic(m)
                 Row(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(if (sel) A.bubble else Color.Transparent)
-                        .clickable { defaultModel = m }.padding(horizontal = 12.dp, vertical = 12.dp),
+                        .clickable(enabled = why == null) { defaultModel = m }.padding(horizontal = 12.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(m, color = A.text, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Column(Modifier.weight(1f)) {
+                        Text(m, color = if (why == null) A.text else A.dim.copy(alpha = 0.6f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (why != null) Text(why, color = A.dim, fontSize = 11.sp, lineHeight = 15.sp)
+                    }
                     if (sel) { Text("default", color = A.accent, fontSize = 12.sp); Spacer(Modifier.width(6.dp)); AIcon(R.drawable.ic_check, tint = A.accent, size = 18.dp) }
                 }
             }

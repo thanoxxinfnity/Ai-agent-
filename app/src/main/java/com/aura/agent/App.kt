@@ -44,7 +44,7 @@ class App : Application() {
             }
             prev?.uncaughtException(t, e)
         }
-        db = Room.databaseBuilder(this, AppDb::class.java, "aura.db").addMigrations(AppDb.MIGRATION_1_2, AppDb.MIGRATION_2_3).fallbackToDestructiveMigration().build()
+        db = Room.databaseBuilder(this, AppDb::class.java, "aura.db").addMigrations(AppDb.MIGRATION_1_2, AppDb.MIGRATION_2_3, AppDb.MIGRATION_3_4).fallbackToDestructiveMigration().build()
         store = Store(this)
         supabase = Supabase(store)
         runner = AgentRunner(this)
@@ -91,11 +91,12 @@ class App : Application() {
         appScope.launch {
             try {
                 for (p in store.providers.value) {
-                    val list = runCatching { withTimeout(20_000) { Llm.listModels(p) } }.getOrNull().orEmpty()
+                    val full = runCatching { withTimeout(20_000) { Llm.listModelsFull(p) } }.getOrNull()
+                    val list = full?.models.orEmpty()
                     if (list.isEmpty()) continue
                     val cur = store.providers.value.firstOrNull { it.id == p.id } ?: continue
                     val keep = if (cur.defaultModel.isNotBlank() && cur.defaultModel !in list) list + cur.defaultModel else list
-                    store.saveProviders(store.providers.value.map { if (it.id == p.id) cur.copy(models = keep.distinct()) else it })
+                    store.saveProviders(store.providers.value.map { if (it.id == p.id) cur.copy(models = keep.distinct(), blocked = full?.blocked.orEmpty()) else it })
                 }
                 store.modelsRefreshedAt = System.currentTimeMillis()
             } finally {

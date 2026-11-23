@@ -80,6 +80,7 @@ object LlmRouter {
         val auto = store.autoMode.value
         val cands = if (auto) store.candidates() else listOfNotNull(store.current())
         if (cands.isEmpty()) throw LlmError("No model selected. Open Settings, add a provider and pick a model.")
+        if (!auto) cands[0].let { (p, m) -> ModelGuard.reason(p, m)?.let { throw LlmError(ModelGuard.warning(p, m, it), 400) } }
         if (!auto) return Llm.stream(cands[0].first, cands[0].second, system, msgs, tools, onText, 3, hooks.onWait, effort)
 
         val ready = cands.filter { Cooldowns.remaining(Cooldowns.key(it.first, it.second)) == 0L }

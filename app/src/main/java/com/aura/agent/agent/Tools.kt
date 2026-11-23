@@ -26,7 +26,7 @@ object Tools {
         putJsonArray("required") { add("path"); add("content") }
     }
 
-    val defs: List<ToolDef> by lazy { (baseDefs + ToolsPro.defs + ToolsVercel.defs).map(::relaxRepo) }
+    val defs: List<ToolDef> by lazy { (baseDefs + ToolsPro.defs + ToolsVercel.defs + ToolsMemory.defs + ToolsLive.defs).map(::relaxRepo) }
 
     /** `repo` stops being required: it defaults to the repository chosen when the chat started. */
     private fun relaxRepo(t: ToolDef): ToolDef {
@@ -166,6 +166,8 @@ object Tools {
         if (ctx.readOnly && name !in ToolsPro.READ_ONLY) return "ERROR: workers are read-only and cannot use $name."
         if (name in ToolsPro.NAMES) return ToolsPro.run(ctx, name, a)
         if (name in ToolsVercel.NAMES) return ToolsVercel.run(ctx, name, a)
+        if (name in ToolsMemory.NAMES) return ToolsMemory.run(ctx, name, a)
+        if (name in ToolsLive.NAMES) return ToolsLive.run(ctx, name, a)
         if (name in CLOUD_TOOLS) return runCloud(name, a, ctx)
         val token = store.githubToken.value
         if (token.isBlank()) return "ERROR: No GitHub token. Ask the user to add one in Settings > GitHub."
@@ -397,6 +399,16 @@ object Tools {
         "playwright_tools" -> "Listing browser tools"
         "playwright_call" -> "Browsing with Playwright"
         "vercel_deploy" -> "Deploying to Vercel"
+        "save_memory" -> "Saving to memory"
+        "search_memory" -> "Searching memory"
+        "delete_memory" -> "Forgetting"
+        "web_search" -> "Searching the web"
+        "web_fetch" -> "Reading a web page"
+        "generate_image" -> "Generating an image"
+        "share_file" -> "Opening the share sheet"
+        "save_to_phone" -> "Saving to the phone"
+        "open_url" -> "Opening a link"
+        "download_file" -> "Downloading a file"
         "edit_file_diff" -> "Editing file"
         "cloud_edit_file" -> "Editing file in codespace"
         "verify_project" -> "Building and checking"

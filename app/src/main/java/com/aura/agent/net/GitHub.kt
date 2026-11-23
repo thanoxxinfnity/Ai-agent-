@@ -17,19 +17,42 @@ class GitHub(private val token: String, private val api: String = "https://api.g
         .header("X-GitHub-Api-Version", "2022-11-28")
         .header("User-Agent", "Aura-Agent")
 
+    companion object {
+        /** base of the exponential backoff for retrying temporary GitHub errors (tests make it tiny) */
+        var backoffMs = 600L
+        private val temporary = setOf(429, 500, 502, 503, 504)
+    }
+
+    /** Reads (GET) are retried 2 times with exponential backoff on 429 and temporary 5xx or network errors; writes are never repeated. */
     suspend fun call(method: String, path: String, body: JsonElement? = null, accept: String? = null): JsonElement = withContext(Dispatchers.IO) {
         val rb = body?.let { it.toString().toRequestBody(Http.JSON) } ?: if (method == "GET" || method == "HEAD") null else "{}".toRequestBody(Http.JSON)
         val req = builder(path).also { if (accept != null) it.header("Accept", accept) }.method(method, rb).build()
-        Http.client.newCall(req).execute().use { r ->
-            val text = r.body?.string().orEmpty()
-            if (!r.isSuccessful) {
-                val j = runCatching { AppJsonLenient.parseToJsonElement(text) as? JsonObject }.getOrNull()
-                val msg = (j?.get("message") as? JsonPrimitive)?.contentOrNull ?: text.take(300)
-                val extra = j?.get("errors")?.toString()?.take(300).orEmpty()
-                throw GhError(r.code, "GitHub ${r.code}: $msg $extra".trim())
+        var attempt = 0
+        while (true) {
+            try {
+                Http.client.newCall(req).execute().use { r ->
+                    val text = r.body?.string().orEmpty()
+                    if (r.code in temporary && method == "GET" && attempt < 2) {
+                        val hinted = r.header("Retry-After")?.toLongOrNull()?.times(1000)
+                        attempt++
+                        kotlinx.coroutines.delay((hinted ?: (backoffMs shl (attempt - 1))).coerceIn(10, 20_000))
+                        return@use
+                    }
+                    if (!r.isSuccessful) {
+                        val j = runCatching { AppJsonLenient.parseToJsonElement(text) as? JsonObject }.getOrNull()
+                        val msg = (j?.get("message") as? JsonPrimitive)?.contentOrNull ?: text.take(300)
+                        val extra = j?.get("errors")?.toString()?.take(300).orEmpty()
+                        throw GhError(r.code, "GitHub ${r.code}: $msg $extra".trim())
+                    }
+                    return@withContext if (text.isBlank()) JsonNull else AppJsonLenient.parseToJsonElement(text)
+                }
+            } catch (e: java.io.IOException) {
+                if (method != "GET" || attempt >= 2) throw GhError(0, "Could not reach GitHub (${e.message}). Check the connection and try again.")
+                attempt++
+                kotlinx.coroutines.delay((backoffMs shl (attempt - 1)).coerceIn(10, 20_000))
             }
-            if (text.isBlank()) JsonNull else AppJsonLenient.parseToJsonElement(text)
         }
+        @Suppress("UNREACHABLE_CODE") JsonNull
     }
 
     /** Downloads a binary resource (for example a repository tarball), following redirects, capped in size. */

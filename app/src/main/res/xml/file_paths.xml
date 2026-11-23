@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <files-path name="generated" path="generated/" />
+    <files-path name="downloads" path="downloads/" />
+    <files-path name="cloud" path="cloud_out/" />
+    <files-path name="attachments" path="attachments/" />
+</paths>

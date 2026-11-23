@@ -18,6 +18,7 @@ import kotlinx.serialization.json.put
 sealed interface Route {
     data object Chat : Route
     data object Settings : Route
+    data object Memory : Route
     data class Provider(val id: String?, val preset: String? = null) : Route
 }
 
@@ -68,7 +69,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
 
     // ---- repository chosen when a chat starts
     data class RepoInfo(val full: String, val private: Boolean, val description: String)
-    val pendingRepo = MutableStateFlow("")
+    val pendingRepo = MutableStateFlow(store.defaultRepo())
     val repos = MutableStateFlow<List<RepoInfo>>(emptyList())
     val reposState = MutableStateFlow("")   // "", "loading", or an error message
 
@@ -112,7 +113,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         full
     }
 
-    fun openChat(id: String?) { currentId.value = id; pendingRepo.value = ""; route.value = Route.Chat }
+    fun openChat(id: String?) { currentId.value = id; pendingRepo.value = if (id == null) store.defaultRepo() else ""; route.value = Route.Chat }
     fun go(r: Route) { route.value = r }
 
     fun send(text: String) {
@@ -124,6 +125,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
             if (id == null) {
                 id = Ids.id()
                 dao.upsertChat(ChatEntity(id, "New chat", Ids.now(), Ids.now(), repo = pendingRepo.value))
+                if (pendingRepo.value.isNotBlank()) store.lastRepo = pendingRepo.value
                 currentId.value = id
             }
             if (runner.isActive(id)) return@launch
@@ -198,11 +200,36 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
 
     fun removeVercel() { store.setVercel("", "", "") }
 
+    // ---- memory (the same rules the agent's tools use)
+    val memories = dao.memories().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private val memoryRepo by lazy { com.aura.agent.agent.MemoryRepo(a) }
+    val memoryMsg = MutableStateFlow("")
+
+    fun saveMemory(key: String, value: String, category: String, oldKey: String? = null) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (oldKey != null && com.aura.agent.agent.MemoryRules.normKey(oldKey) != com.aura.agent.agent.MemoryRules.normKey(key)) memoryRepo.delete(oldKey)
+            memoryRepo.save(key, value, category).onFailure { memoryMsg.value = it.message ?: "Could not save" }.onSuccess { memoryMsg.value = "" }
+        }
+    }
+
+    fun deleteMemory(key: String) { viewModelScope.launch(Dispatchers.IO) { memoryRepo.delete(key) } }
+
+    fun pinRepo(full: String) { viewModelScope.launch(Dispatchers.IO) { memoryRepo.pinRepo(full) } }
+
+    fun shareFile(att: Attachment) {
+        val f = java.io.File(att.path)
+        a.voice.error.value = com.aura.agent.agent.AndroidActions.share(a, f).takeIf { it.startsWith("ERROR") }.orEmpty()
+    }
+
+    fun saveFileToPhone(att: Attachment) {
+        viewModelScope.launch(Dispatchers.IO) { attachMsg.value = com.aura.agent.agent.AndroidActions.saveToPhone(a, java.io.File(att.path)) }
+    }
+
     fun removeCodespace() { store.setCodespace("", "") }
 
     fun disconnectGithub() = store.setGithub("", "")
 
-    suspend fun fetchModels(p: Provider): Result<List<String>> = runCatching { Llm.listModels(p) }
+    suspend fun fetchModels(p: Provider): Result<com.aura.agent.net.ModelList> = runCatching { Llm.listModelsFull(p) }
 
 
     suspend fun addKeyless(kind: String): Result<String> = runCatching {
@@ -212,8 +239,9 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         }
         val existing = store.providers.value.firstOrNull { it.baseUrl == base }
         val draft = existing ?: Provider(id = Ids.id(), name = name, baseUrl = base, modelsUrl = models)
-        val list = Llm.listModels(draft)
-        val p = draft.copy(models = list, defaultModel = list.firstOrNull().orEmpty())
+        val full = Llm.listModelsFull(draft)
+        val list = full.models
+        val p = draft.copy(models = list, blocked = full.blocked, defaultModel = list.firstOrNull { it !in full.blocked }.orEmpty())
         store.upsertProvider(p)
         store.select(p.id, p.defaultModel)
         "${list.size} models connected"

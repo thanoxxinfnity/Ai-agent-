@@ -98,13 +98,14 @@ fun MainScreen(vm: MainVM) {
             Box(Modifier.fillMaxSize().background(A.bg)) {
                 when (val r = shown) {
                     is Route.Provider -> ProviderEditor(vm, r)
+                    Route.Memory -> MemoryScreen(vm)
                     else -> SettingsScreen(vm)
                 }
             }
         }
         if (ghToken.isBlank() && !skipped) LoginGate(vm) { skipped = true }
     }
-    BackHandler0(route != Route.Chat) { vm.go(if (route is Route.Provider) Route.Settings else Route.Chat) }
+    BackHandler0(route != Route.Chat) { vm.go(if (route is Route.Provider || route == Route.Memory) Route.Settings else Route.Chat) }
 }
 
 @Composable
@@ -127,6 +128,7 @@ fun ChatHost(vm: MainVM) {
     val pending by vm.pending.collectAsState()
     val attachMsg by vm.attachMsg.collectAsState()
     val pendingRepo by vm.pendingRepo.collectAsState()
+    val pinnedRepo by vm.store.pinnedRepo.collectAsState()
     val pickImages = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetMultipleContents()) { vm.attach(it) }
     val pickFiles = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetMultipleContents()) { vm.attach(it) }
     val chat = chats.firstOrNull { it.id == currentId }
@@ -177,7 +179,7 @@ fun ChatHost(vm: MainVM) {
                         Modifier.clip(CircleShape).border(1.dp, A.border, CircleShape).clickable { repoPicker = true }.padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        AIcon(R.drawable.ic_branch, tint = if (pendingRepo.isBlank()) A.dim else A.accent, size = 16.dp)
+                        AIcon(if (pendingRepo.isNotBlank() && pendingRepo == pinnedRepo) R.drawable.ic_pin else R.drawable.ic_branch, tint = if (pendingRepo.isBlank()) A.dim else A.accent, size = 16.dp)
                         Spacer(Modifier.width(8.dp))
                         Text(if (pendingRepo.isBlank()) "Choose repository" else pendingRepo, color = if (pendingRepo.isBlank()) A.dim else A.text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 240.dp))
                         Spacer(Modifier.width(4.dp))
@@ -251,7 +253,7 @@ private fun MessageList(messages: List<MessageEntity>, vm: MainVM) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (running) item(key = "thinking") { Thinking(status) }
-        items(reversed, key = { it.id }) { m -> MessageItem(m, liveState, restoreFor[m.id]?.let { t -> cps[t] ?: 0 }, { restoreFor[m.id]?.let { t -> confirmTurn = t } }, voiceState) { vm.voice.speak(m.id, m.content) } }
+        items(reversed, key = { it.id }) { m -> MessageItem(m, liveState, restoreFor[m.id]?.let { t -> cps[t] ?: 0 }, { restoreFor[m.id]?.let { t -> confirmTurn = t } }, voiceState, vm::shareFile, vm::saveFileToPhone) { vm.voice.speak(m.id, m.content) } }
     }
     AnimatedVisibility(
         visible = !atBottom, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
@@ -276,7 +278,7 @@ private fun MessageList(messages: List<MessageEntity>, vm: MainVM) {
 }
 
 @Composable
-private fun MessageItem(m: MessageEntity, live: State<Map<String, String>>, restoreCount: Int?, onRestore: () -> Unit, voice: State<com.aura.agent.agent.VoiceState>, onSpeak: () -> Unit) {
+private fun MessageItem(m: MessageEntity, live: State<Map<String, String>>, restoreCount: Int?, onRestore: () -> Unit, voice: State<com.aura.agent.agent.VoiceState>, onShare: (Attachment) -> Unit, onSave: (Attachment) -> Unit, onSpeak: () -> Unit) {
     when (m.role) {
         "user" -> UserBubble(m.content, remember(m.attachments) { Attachments.parse(m.attachments) })
         "assistant" -> {
@@ -288,7 +290,7 @@ private fun MessageItem(m: MessageEntity, live: State<Map<String, String>>, rest
         "note" -> {}
         "switch" -> Text(m.content, color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp))
         "summary" -> SummaryRow(m.content)
-        else -> ToolStep(m, live)
+        else -> ToolStep(m, live, onShare, onSave)
     }
 }
 
@@ -381,7 +383,7 @@ private fun ErrorRow(text: String) {
 }
 
 @Composable
-private fun ToolStep(m: MessageEntity, live: State<Map<String, String>>) {
+private fun ToolStep(m: MessageEntity, live: State<Map<String, String>>, onShare: (Attachment) -> Unit, onSave: (Attachment) -> Unit) {
     var open by remember { mutableStateOf(false) }
     val liveText = live.value[m.id]
     val running = liveText != null
@@ -400,6 +402,20 @@ private fun ToolStep(m: MessageEntity, live: State<Map<String, String>>) {
             Text(if (running) "Running" else if (m.isError) "Failed" else "Done", color = if (m.isError && !running) A.danger else A.dim, fontSize = 13.sp)
             Spacer(Modifier.width(6.dp))
             AIcon(if (expanded) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right, tint = A.dim, size = 16.dp)
+        }
+        val files = remember(m.attachments) { Attachments.parse(m.attachments) }
+        files.forEach { f ->
+            Spacer(Modifier.height(10.dp))
+            if (f.kind == "image") Thumb(f, 180.dp)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
+                AIcon(if (f.kind == "image") R.drawable.ic_image else R.drawable.ic_file, tint = A.accent, size = 16.dp)
+                Spacer(Modifier.width(6.dp))
+                Text("${f.name}  -  ${Attachments.human(f.size)}", color = A.dim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            }
+            Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PillButton("Share", { onShare(f) }, primary = false, modifier = Modifier.testTag("file-share"))
+                PillButton("Save to phone", { onSave(f) }, primary = false, modifier = Modifier.testTag("file-save"))
+            }
         }
         if (expanded) {
             Spacer(Modifier.height(10.dp))
@@ -640,6 +656,7 @@ private fun RepoPicker(vm: MainVM, onDismiss: () -> Unit) {
     val repos by vm.repos.collectAsState()
     val state by vm.reposState.collectAsState()
     val selected by vm.pendingRepo.collectAsState()
+    val pinned by vm.store.pinnedRepo.collectAsState()
     var q by remember { mutableStateOf("") }
     var creating by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
@@ -654,6 +671,15 @@ private fun RepoPicker(vm: MainVM, onDismiss: () -> Unit) {
             Text("Pick it now: it is fixed for this chat. The agent can still clone other repositories later.", color = A.dim, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(bottom = 10.dp))
             LazyColumn(Modifier.weight(1f)) {
                 item {
+                    if (pinned.isNotBlank()) Row(
+                        Modifier.fillMaxWidth().padding(bottom = 6.dp).clip(RoundedCornerShape(14.dp)).background(A.bubble).padding(start = 14.dp, top = 6.dp, bottom = 6.dp, end = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AIcon(R.drawable.ic_pin, tint = A.accent, size = 18.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Text("Pinned: $pinned", color = A.text, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        Text("Unpin", color = A.accent, fontSize = 13.sp, modifier = Modifier.clip(CircleShape).clickable { vm.pinRepo("") }.padding(horizontal = 12.dp, vertical = 8.dp))
+                    }
                     RepoRow("No repository", "Chat without a project", selected.isBlank(), lock = false) { vm.pendingRepo.value = ""; onDismiss() }
                     Row(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { creating = !creating }.padding(horizontal = 12.dp, vertical = 13.dp),
@@ -695,7 +721,7 @@ private fun RepoPicker(vm: MainVM, onDismiss: () -> Unit) {
                     } else if (state.isNotBlank()) Text(state, color = A.danger, fontSize = 13.sp, modifier = Modifier.padding(12.dp))
                 }
                 items(repos.filter { q.isBlank() || it.full.contains(q, true) }, key = { it.full }) { r ->
-                    RepoRow(r.full, r.description.ifBlank { if (r.private) "Private" else "Public" }, r.full == selected, lock = r.private) { vm.pendingRepo.value = r.full; onDismiss() }
+                    RepoRow(r.full, r.description.ifBlank { if (r.private) "Private" else "Public" }, r.full == selected, lock = r.private, pinned = r.full == pinned, onPin = { vm.pinRepo(if (r.full == pinned) "" else r.full) }) { vm.pendingRepo.value = r.full; onDismiss() }
                 }
             }
         }
@@ -703,7 +729,7 @@ private fun RepoPicker(vm: MainVM, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun RepoRow(title: String, sub: String, selected: Boolean, lock: Boolean, onClick: () -> Unit) {
+private fun RepoRow(title: String, sub: String, selected: Boolean, lock: Boolean, pinned: Boolean = false, onPin: (() -> Unit)? = null, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(if (selected) A.bubble else androidx.compose.ui.graphics.Color.Transparent)
             .clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 11.dp),
@@ -717,6 +743,7 @@ private fun RepoRow(title: String, sub: String, selected: Boolean, lock: Boolean
         }
         if (lock) Text("private", color = A.dim, fontSize = 11.sp, modifier = Modifier.padding(end = 6.dp))
         if (selected) AIcon(R.drawable.ic_check, tint = A.accent, size = 20.dp)
+        if (onPin != null) IconBtn(R.drawable.ic_pin, onPin, tint = if (pinned) A.accent else A.dim, size = 36.dp, modifier = Modifier.testTag("pin-$title"))
     }
 }
 
@@ -860,12 +887,16 @@ private fun ModelPicker(
                         }
                         items(models, key = { "${p.id}/$it" }) { m ->
                             val sel = !auto && p.id == activeProvider && m == activeModel
+                            val why = com.aura.agent.net.ModelGuard.reason(p, m)
                             Row(
                                 Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(if (sel) A.bubble else androidx.compose.ui.graphics.Color.Transparent)
-                                    .clickable { onPick(p.id, m) }.padding(horizontal = 12.dp, vertical = 13.dp),
+                                    .clickable(enabled = why == null) { onPick(p.id, m) }.padding(horizontal = 12.dp, vertical = 13.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Text(m, color = A.text, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                Column(Modifier.weight(1f)) {
+                                    Text(m, color = if (why == null) A.text else A.dim.copy(alpha = 0.6f), fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    if (why != null) Text(why, color = A.dim, fontSize = 11.sp, lineHeight = 15.sp)
+                                }
                                 if (sel) AIcon(R.drawable.ic_check, tint = A.accent, size = 20.dp)
                             }
                         }

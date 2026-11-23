@@ -89,7 +89,7 @@ object ToolsPro {
 
     /** Tools a worker sub-agent may use. */
     val READ_ONLY = setOf(
-        "search_code", "find_files", "read_lines", "github_read_file", "github_list_files", "github_whoami",
+        "search_code", "find_files", "read_lines", "github_read_file", "github_list_files", "github_whoami", "web_search", "web_fetch",
         "github_list_repos", "github_list_runs", "github_latest_release", "use_skill",
     )
 
@@ -200,19 +200,24 @@ object ToolsPro {
 
     private suspend fun attachToRepo(ctx: ToolCtx, a: JsonObject): String {
         val att = findAttachment(ctx, a.s("name") ?: return "ERROR: name required") ?: return "ERROR: no attachment with that name in this chat."
+        return commitBytes(ctx, a.s("repo"), a.s("path") ?: att.name, java.io.File(att.path).readBytes(), a.s("message") ?: "Add ${att.name}", a.s("branch"))
+    }
+
+    /** Commits one binary or text file to a repo (creating or replacing it), after saving a checkpoint. */
+    suspend fun commitBytes(ctx: ToolCtx, repoArg: String?, path: String, bytes: ByteArray, message: String, branchArg: String?): String {
         val (g, me) = gh(ctx) ?: return "ERROR: No GitHub token. Ask the user to sign in first."
-        val repo = (a.s("repo") ?: return "ERROR: repo required").let { if ("/" in it) it else "$me/$it" }
-        val path = a.s("path") ?: att.name
-        val branch = a.s("branch") ?: g.call("GET", "/repos/$repo").s("default_branch")!!
+        val repo = (repoArg?.takeIf { it.isNotBlank() } ?: ctx.activeRepo.ifBlank { null } ?: return "ERROR: repo required (choose a repository when the chat starts or pass repo).")
+            .let { if ("/" in it) it else "$me/$it" }
+        val branch = branchArg ?: g.call("GET", "/repos/$repo").s("default_branch")!!
         val sha = try { (g.call("GET", "/repos/$repo/contents/$path?ref=$branch") as JsonObject).s("sha") } catch (e: GhError) { if (e.code == 404) null else throw e }
         val head = (g.call("GET", "/repos/$repo/git/ref/heads/$branch") as JsonObject)["object"].s("sha")!!
-        Checkpoints(ctx.app).recordGithub(ctx, repo, branch, head, "add ${att.name}")
+        Checkpoints(ctx.app).recordGithub(ctx, repo, branch, head, "add $path")
         g.call("PUT", "/repos/$repo/contents/$path", buildJsonObject {
-            put("message", a.s("message") ?: "Add ${att.name}"); put("branch", branch)
-            put("content", Base64.getEncoder().encodeToString(java.io.File(att.path).readBytes())); sha?.let { put("sha", it) }
+            put("message", message); put("branch", branch)
+            put("content", Base64.getEncoder().encodeToString(bytes)); sha?.let { put("sha", it) }
         })
         ctx.state.markModified()
-        return "Committed ${att.name} to $repo@$branch as $path."
+        return "Committed ${path.substringAfterLast('/')} to $repo@$branch as $path."
     }
 
     private suspend fun verify(ctx: ToolCtx, a: JsonObject): String {

@@ -97,7 +97,7 @@ class MigrationTest {
         raw.version = 1
         raw.close()
         // strict: no destructive fallback, so a schema mismatch would crash here exactly as it would for users
-        val db = Room.databaseBuilder(ctx, AppDb::class.java, "migrate-test.db").addMigrations(AppDb.MIGRATION_1_2, AppDb.MIGRATION_2_3).allowMainThreadQueries().build()
+        val db = Room.databaseBuilder(ctx, AppDb::class.java, "migrate-test.db").addMigrations(AppDb.MIGRATION_1_2, AppDb.MIGRATION_2_3, AppDb.MIGRATION_3_4).allowMainThreadQueries().build()
         val dao = db.dao()
         val msgs = runBlocking { dao.messagesOnce("old1") }
         assertEquals("hello from v1", msgs.single().content)
@@ -111,6 +111,11 @@ class MigrationTest {
         }
         assertTrue(runBlocking { dao.messagesOnce("old1") }.single().compacted)
         assertEquals(1, runBlocking { dao.checkpointsForTurn("t") }.size)
+        // v4: the memories table exists after the upgrade and the old chat is untouched
+        runBlocking { dao.upsertMemory(MemoryEntity("pref", "dark mode", "preference", 1)) }
+        assertEquals("dark mode", runBlocking { dao.memory("pref") }!!.value)
+        assertEquals(1, runBlocking { dao.memoryCount() })
+        assertEquals("hello from v1", runBlocking { dao.messagesOnce("old1") }.single().content)
         db.close()
     }
 }

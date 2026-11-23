@@ -29,9 +29,13 @@ class Mock {
     val compactCount = java.util.concurrent.atomic.AtomicInteger()
     var tarball: ByteArray = ByteArray(0)
     val digests = CopyOnWriteArrayList<String>()
+    /** routes under /web/, /img/ and /dl/ are decided by each test */
+    var webRoutes: (RecordedRequest, String) -> MockResponse? = { _, _ -> null }
     var vercelState = "READY"
     var vercelPolls = java.util.concurrent.atomic.AtomicInteger()
     val vercelCreate = ConcurrentLinkedQueue<MockResponse>()
+    /** answers served first for any /gh/ request (to simulate temporary GitHub errors) */
+    val ghFirst = ConcurrentLinkedQueue<MockResponse>()
     val altRequests = CopyOnWriteArrayList<String>()
     val scriptB = ConcurrentLinkedQueue<MockResponse>()
     val verifyResults = ConcurrentLinkedQueue<String>()
@@ -55,6 +59,7 @@ class Mock {
                 val body = r.body.readUtf8()
                 log += r.method + " " + p
                 bodies += (r.method + " " + p) to body
+                if (p.startsWith("/gh/")) ghFirst.poll()?.let { return it }
                 return when {
                     p.startsWith("/v2/chat/completions") -> if (body.contains("You write chat titles")) text("Title from provider B here") else { altRequests += body; scriptB.poll() ?: text("from B") }
                     p.startsWith("/gh/repos/octo/r/tarball") -> MockResponse().setHeader("Content-Type", "application/gzip").setBody(okio.Buffer().write(tarball))
@@ -65,6 +70,8 @@ class Mock {
                         else if (vercelState == "READY") json("{\"id\":\"dpl_1\",\"url\":\"my-site-abc123.vercel.app\",\"readyState\":\"READY\",\"alias\":[\"my-site.vercel.app\"]}")
                         else json("{\"id\":\"dpl_1\",\"url\":\"my-site-abc123.vercel.app\",\"readyState\":\"ERROR\",\"errorMessage\":\"Build failed\"}")
                     p.startsWith("/vc/v3/deployments/dpl_1/events") -> json("[{\"text\":\"Running npm run build\"},{\"payload\":{\"text\":\"Error: Module not found: x\"}}]")
+                    p.startsWith("/web/") || p.startsWith("/img/") || p.startsWith("/dl/") -> webRoutes(r, body) ?: json("{}", 404)
+                    p.startsWith("/gh/repos/octo/r/contents/app/") || p.startsWith("/gh/repos/octo/r/contents/assets/") -> if (r.method == "GET") json("{}", 404) else json("{}", 201)
                     p.startsWith("/v1/responses") -> { mainRequests += body; MockResponse().setHeader("Content-Type", "text/event-stream").setBody("data: {\"type\":\"response.output_text.delta\",\"delta\":\"responses ok\"}\n\ndata: {\"type\":\"response.completed\"}\n\n") }
                     p.startsWith("/gh/repos/octo/r/contents/uploads/") || p.startsWith("/gh/repos/octo/r/contents/data.bin") -> if (r.method == "GET") json("{}", 404) else json("{}", 201)
                     p.startsWith("/v1/chat/completions") -> when {
