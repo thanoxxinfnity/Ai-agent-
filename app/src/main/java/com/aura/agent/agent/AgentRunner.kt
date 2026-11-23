@@ -221,7 +221,6 @@ class AgentRunner(private val app: App) {
             val snippet = msgs.lastOrNull { it.role == "assistant" && it.content.isNotBlank() }?.content.orEmpty()
             app.notifyDone(chatId, chat.title, if (error != null) "Failed: $error" else snippet)
         }
-        if (chat != null) scope.launch { app.supabase.pushChat(chat, msgs) }
         if (chat != null && !chat.titled && error == null && msgs.any { it.role == "assistant" && it.content.isNotBlank() }) {
             scope.launch { makeTitle(chatId) }
         }
@@ -343,8 +342,7 @@ class AgentRunner(private val app: App) {
 
     // ------------------------------------------------------------ context compaction
 
-    private fun contextChars(active: List<MessageEntity>) =
-        active.sumOf { it.content.length + (it.toolCalls?.length ?: 0) } + SYSTEM.length + 3000
+    private fun contextChars(active: List<MessageEntity>) = ContextMeter.chars(active, SYSTEM.length)
 
     /** When the history reaches ~75% of the context window, older turns are folded into one summary message. */
     private val lastCompact = ConcurrentHashMap<String, Long>()
@@ -387,7 +385,7 @@ class AgentRunner(private val app: App) {
 
     private fun systemPrompt(repo: String = "", mode: ThinkMode = ThinkMode.STEADY, memory: String = "", long: Boolean = false): String {
         val skills = store.enabledSkills()
-        val base = SYSTEM + (if (long) "\n\n" + LONG_ANSWERS else "") + (if (mode.prompt.isNotBlank()) "\n\n" + mode.prompt else "") + (if (memory.isNotBlank()) "\n\n" + memory else "") + ToolsVault.promptBlock(app.extras.vault.value).let { if (it.isBlank()) "" else "\n\n" + it } + if (repo.isNotBlank()) "\n\nActive repository for this chat: $repo. Repo tools use it by default and the codespace opens it automatically. Other repositories can be cloned with cloud_clone." else "\n\nNo repository was chosen for this chat. If the user wants code written, ask which repository to use or create one with github_create_repo."
+        val base = SYSTEM + "\n\nThe user's selected app language is ${com.aura.agent.ui.AppLocale.aiName(app.extras.language.value)}; reply in that language unless the user writes in another one (Hinglish stays Hinglish)." + (if (long) "\n\n" + LONG_ANSWERS else "") + (if (mode.prompt.isNotBlank()) "\n\n" + mode.prompt else "") + (if (memory.isNotBlank()) "\n\n" + memory else "") + ToolsVault.promptBlock(app.extras.vault.value).let { if (it.isBlank()) "" else "\n\n" + it } + if (repo.isNotBlank()) "\n\nActive repository for this chat: $repo. Repo tools use it by default and the codespace opens it automatically. Other repositories can be cloned with cloud_clone." else "\n\nNo repository was chosen for this chat. If the user wants code written, ask which repository to use or create one with github_create_repo."
         if (skills.isEmpty()) return base
         return base + "\n\nAvailable skills (call use_skill with the name to load the full instructions when the task matches):\n" +
             skills.joinToString("\n") { "- ${it.name}: ${it.description}" }
@@ -434,37 +432,26 @@ class AgentRunner(private val app: App) {
     }
 
     private suspend fun makeTitle(chatId: String) {
-        if (store.current() == null && !(store.autoMode.value && store.candidates().isNotEmpty())) return
         val msgs = dao.messagesOnce(chatId)
-        val firstUser = msgs.firstOrNull { it.role == "user" }?.content.orEmpty()
+        val userMsgs = msgs.filter { it.role == "user" }
+        val users = userMsgs.map { it.content }.filter { it.isNotBlank() }
+        // a greeting has no topic: wait for the next message and name the chat then
+        if (TitleMaker.onlySmallTalk(users)) return
         val firstReply = msgs.firstOrNull { it.role == "assistant" && it.content.isNotBlank() }?.content.orEmpty()
-        val prompt = "Write a short, casual, friendly title for this chat, like a quick greeting or a natural phrase. " +
-            "It must be between 30 and 50 characters long. Use the same language the user writes in. " +
-            "No quotes, no emoji, no trailing punctuation. Reply with the title only.\n\n" +
-            "User: ${firstUser.take(400)}\nAssistant: ${firstReply.take(400)}"
-        val raw = runCatching {
+        val files = userMsgs.flatMap { Attachments.parse(it.attachments) }.map { it.name }
+        val canAsk = store.current() != null || (store.autoMode.value && store.candidates().isNotEmpty())
+        val raw = if (!canAsk) "" else runCatching {
             val sb = StringBuilder()
-            withTimeout(45_000) { LlmRouter.stream(store, "You write chat titles.", listOf(LlmMsg("user", prompt)), emptyList()) { sb.append(it) } }
+            withTimeout(45_000) { LlmRouter.stream(store, TitleMaker.SYSTEM, listOf(LlmMsg("user", TitleMaker.prompt(users, files))), emptyList()) { sb.append(it) } }
             sb.toString()
         }.getOrDefault("")
-        val title = clampTitle(raw).ifBlank { clampTitle(firstUser) }.ifBlank { "Quick chat with Aura" }
+        val title = TitleMaker.clean(raw, firstReply).ifBlank { TitleMaker.fallback(users) }
         dao.setTitle(chatId, title, true)
-        dao.chat(chatId)?.let { app.supabase.pushChat(it, dao.messagesOnce(chatId)) }
     }
 
     companion object {
         val LOOP_EXEMPT = setOf("verify_project", "github_wait_run", "github_list_runs", "github_run_logs", "playwright_call", "agent_browser", "cloud_exec")
         const val HISTORY_LIMIT = 120
-
-        fun clampTitle(raw: String): String {
-            var t = raw.trim().lineSequence().firstOrNull { it.isNotBlank() }.orEmpty().trim()
-            t = t.trim('"', '\'', '`', '*', '#', ' ').trimEnd('.', '!', '?', ',', ':', ';')
-            if (t.length > 50) {
-                val cut = t.take(50)
-                t = cut.substringBeforeLast(' ', cut).ifBlank { cut }.trimEnd('.', ',', ' ')
-            }
-            return t
-        }
 
         const val NUDGE = "[auto-check] You changed files but have not run verify_project yet. If the project is in the codespace, run verify_project now, fix every error with edit_file_diff or cloud_edit_file and run it again until it prints VERIFY PASS (the tool says when the attempt limit is reached). If the code only exists in a GitHub repository, clone it into the codespace first with `gh repo clone owner/name` (GH_TOKEN is already set), or rely on the repository's CI run. Then give the user a short summary."
 

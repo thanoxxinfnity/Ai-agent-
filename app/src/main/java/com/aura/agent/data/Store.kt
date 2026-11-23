@@ -164,6 +164,9 @@ class Store(ctx: Context) {
     var supaRefresh: String
         get() = s("supaRefresh"); set(v) { prefs.edit().putString("supaRefresh", v).apply() }
 
+    /** when the phone last asked for the public settings, successful or not (limits retries while they are missing) */
+    var configTriedAt: Long
+        get() = prefs.getLong("configTriedAt", 0L); set(v) { prefs.edit().putLong("configTriedAt", v).apply() }
     var configFetchedAt: Long
         get() = prefs.getLong("configFetchedAt", 0L); set(v) { prefs.edit().putLong("configFetchedAt", v).apply() }
 

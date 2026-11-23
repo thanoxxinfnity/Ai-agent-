@@ -1,0 +1,59 @@
+<resources>
+    <!-- login and privacy -->
+    <string name="login_tagline">आपका AI एजेंट जो ऐप बनाता है और उन्हें GitHub के ज़रिए भेजता है।</string>
+    <string name="skip_for_now">अभी छोड़ें</string>
+    <string name="sign_in_github">GitHub से साइन इन करें</string>
+    <string name="signed_in">साइन इन है</string>
+    <string name="github_account">GitHub खाता</string>
+    <string name="sign_out">साइन आउट</string>
+    <string name="device_enter_code">यह कोड GitHub पर डालें</string>
+    <string name="device_copy_open">कोड कॉपी करें और GitHub खोलें</string>
+    <string name="device_waiting">आपकी मंज़ूरी का इंतज़ार है</string>
+    <string name="cancel">रद्द करें</string>
+    <string name="privacy_title">आपका डेटा आपके ही फ़ोन में रहता है।</string>
+    <string name="privacy_nobackup">डेटा का बैकअप नहीं होता। सब कुछ केवल इसी फ़ोन में रहता है। GitHub केवल इसलिए जोड़ा जाता है कि AI वहाँ कोड पुश कर सके।</string>
+    <string name="privacy_p1">आपकी चैट, मेमोरी, API कुंजियाँ और टोकन केवल इसी फ़ोन में एन्क्रिप्टेड रूप में रखे जाते हैं। वे हमारे किसी सर्वर पर सेव नहीं होते।</string>
+    <string name="privacy_p2">GitHub से जुड़ना केवल इसलिए है कि AI आपके चुने हुए रिपॉज़िटरी को पढ़ और बदल सके तथा बिल्ड/APK बना सके। AI को इससे अधिक कुछ नहीं मिलता, और आप जब चाहें Disconnect करके इसे हटा सकते हैं।</string>
+    <string name="privacy_p3">GitHub पर कुछ भी तभी जाता है जब आप हाँ कहें।</string>
+    <string name="privacy_provider">चैट का टेक्स्ट केवल उसी AI प्रदाता के पास जाता है जिसे आपने स्वयं चुना है।</string>
+    <string name="privacy_short">डेटा का बैकअप नहीं होता। GitHub केवल इसलिए जोड़ा जाता है कि AI आपके चुने हुए रिपॉज़िटरी में कोड पुश कर सके, और आपके हाँ कहे बिना कुछ भी पुश नहीं होता। चैट का टेक्स्ट केवल उसी AI प्रदाता के पास जाता है जिसे आपने चुना है।</string>
+
+    <!-- settings -->
+    <string name="settings_title">सेटिंग्स</string>
+    <string name="sec_providers">मॉडल प्रदाता</string>
+    <string name="add_provider">प्रदाता जोड़ें</string>
+    <string name="sec_github">GitHub</string>
+    <string name="sec_push">GitHub पर पुश करना</string>
+    <string name="sec_codespace">GitHub Codespace टोकन (PAT)</string>
+    <string name="sec_vercel">Vercel (वेबसाइट डिप्लॉय करें)</string>
+    <string name="sec_free">मुफ़्त प्रदाता (बिना API कुंजी)</string>
+    <string name="sec_vault">API कुंजियाँ (AI से छिपी हुई)</string>
+    <string name="sec_mcp">MCP सर्वर</string>
+    <string name="sec_folders">फ़ोन के फ़ोल्डर</string>
+    <string name="sec_answers">जवाब</string>
+    <string name="sec_memory">मेमोरी</string>
+    <string name="sec_voice">आवाज़ (ज़ोर से पढ़ना)</string>
+    <string name="sec_safety">एजेंट की सुरक्षा और मेमोरी</string>
+    <string name="sec_appearance">रूप-रंग</string>
+    <string name="sec_language">भाषा</string>
+    <string name="language_hint">बदलाव तुरंत लागू होता है। जिन टेक्स्ट का अनुवाद अभी नहीं हुआ है वे अंग्रेज़ी में ही रहेंगे।</string>
+
+    <!-- main chat screen -->
+    <string name="chat_empty">आज हम क्या बनाएँ?</string>
+    <string name="connect_model">पहले एक मॉडल जोड़ें</string>
+    <string name="connect_model_hint">सेटिंग्स में Gemini, NVIDIA या कोई भी कस्टम एंडपॉइंट जोड़ें।</string>
+    <string name="open_settings">सेटिंग्स खोलें</string>
+    <string name="choose_repository">रिपॉज़िटरी चुनें</string>
+    <string name="message_hint">Aura को संदेश लिखें, स्किल्स के लिए @ टाइप करें</string>
+    <string name="choose_model">मॉडल चुनें</string>
+    <string name="photos_images">फ़ोटो और चित्र</string>
+    <string name="files">फ़ाइलें</string>
+    <string name="new_chat">नई चैट</string>
+    <string name="search_chats">चैट खोजें</string>
+    <string name="recent">हाल की</string>
+    <string name="rename">नाम बदलें</string>
+    <string name="delete">हटाएँ</string>
+    <string name="search_models">मॉडल खोजें</string>
+    <string name="choose_a_repository">एक रिपॉज़िटरी चुनें</string>
+    <string name="context_label">कॉन्टेक्स्ट %1$s / %2$s</string>
+</resources>

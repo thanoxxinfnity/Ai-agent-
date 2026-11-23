@@ -14,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
@@ -125,14 +126,14 @@ fun GithubSignIn(vm: MainVM) {
             AIcon(R.drawable.ic_github, tint = A.text)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
-                Text("Signed in", color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                Text(user.ifBlank { "GitHub account" }, color = A.dim, fontSize = 13.sp)
+                Text(stringResource(R.string.signed_in), color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                Text(user.ifBlank { stringResource(R.string.github_account) }, color = A.dim, fontSize = 13.sp)
             }
-            PillButton("Sign out", { vm.disconnectGithub() }, primary = false, danger = true)
+            PillButton(stringResource(R.string.sign_out), { vm.disconnectGithub() }, primary = false, danger = true)
         }
         device != null -> DeviceCard(vm, device!!)
         else -> Column {
-            GithubButton { vm.startGithubLogin() }
+            GithubButton(Modifier.testTag("login-button")) { vm.startGithubLogin() }
             if (msg.isNotBlank()) Text(msg, color = A.danger, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
         }
     }
@@ -305,7 +306,7 @@ fun GithubButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
     ) {
         AIcon(R.drawable.ic_github, tint = A.bg, size = 22.dp)
         Spacer(Modifier.width(10.dp))
-        Text("Sign in with GitHub", color = A.bg, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+        Text(stringResource(R.string.sign_in_github), color = A.bg, fontSize = 16.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -317,19 +318,19 @@ fun DeviceCard(vm: MainVM, d: com.aura.agent.net.GhOAuth.Device) {
         Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(A.surface).border(1.dp, A.border, RoundedCornerShape(18.dp)).padding(20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("Enter this code on GitHub", color = A.dim, fontSize = 13.sp)
+        Text(stringResource(R.string.device_enter_code), color = A.dim, fontSize = 13.sp)
         Spacer(Modifier.height(8.dp))
         Text(d.userCode, color = A.text, fontFamily = FontFamily.Monospace, fontSize = 34.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 4.sp)
         Spacer(Modifier.height(16.dp))
-        GithubButtonLabel("Copy code and open GitHub") { clip.setText(androidx.compose.ui.text.AnnotatedString(d.userCode)); runCatching { uri.openUri(d.uri) } }
+        GithubButtonLabel(stringResource(R.string.device_copy_open)) { clip.setText(androidx.compose.ui.text.AnnotatedString(d.userCode)); runCatching { uri.openUri(d.uri) } }
         Spacer(Modifier.height(14.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             CircularProgressIndicator(Modifier.size(14.dp), color = A.accent, strokeWidth = 2.dp)
             Spacer(Modifier.width(8.dp))
-            Text("Waiting for you to approve", color = A.dim, fontSize = 13.sp)
+            Text(stringResource(R.string.device_waiting), color = A.dim, fontSize = 13.sp)
         }
         Spacer(Modifier.height(10.dp))
-        Text("Cancel", color = A.dim, fontSize = 14.sp, modifier = Modifier.clip(CircleShape).clickable { vm.cancelGithubLogin() }.padding(horizontal = 14.dp, vertical = 8.dp))
+        Text(stringResource(R.string.cancel), color = A.dim, fontSize = 14.sp, modifier = Modifier.clip(CircleShape).clickable { vm.cancelGithubLogin() }.padding(horizontal = 14.dp, vertical = 8.dp))
     }
 }
 
@@ -348,26 +349,34 @@ private fun GithubButtonLabel(label: String, onClick: () -> Unit) {
 @Composable
 fun LoginGate(vm: MainVM, onSkip: () -> Unit) {
     val device by vm.device.collectAsState()
-    Column(
-        Modifier.fillMaxSize().background(A.bg).statusBarsPadding().navigationBarsPadding().padding(horizontal = 28.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Spacer(Modifier.weight(1f))
-        AIcon(R.drawable.ic_sparkle, tint = A.accent, size = 52.dp)
-        Spacer(Modifier.height(18.dp))
-        Text("Aura", color = A.text, fontFamily = FontFamily.Serif, fontSize = 44.sp)
-        Spacer(Modifier.height(10.dp))
-        Text(
-            "Your AI agent that builds apps and ships them through GitHub.",
-            color = A.dim, fontSize = 16.sp, lineHeight = 23.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-        )
-        Spacer(Modifier.height(36.dp))
-        if (device != null) DeviceCard(vm, device!!) else GithubSignIn(vm)
-        Spacer(Modifier.weight(1f))
-        Text(
-            "Skip for now", color = A.dim, fontSize = 14.sp,
-            modifier = Modifier.padding(bottom = 18.dp).clip(CircleShape).clickable(onClick = onSkip).padding(horizontal = 16.dp, vertical = 10.dp),
-        )
+    Column(Modifier.fillMaxSize().background(A.bg).statusBarsPadding().navigationBarsPadding().testTag("login-screen")) {
+        // the top part scrolls, so a small phone can read the whole privacy text
+        Column(
+            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
+        ) {
+            Spacer(Modifier.height(20.dp))
+            AIcon(R.drawable.ic_sparkle, tint = A.accent, size = 52.dp)
+            Spacer(Modifier.height(14.dp))
+            Text("Aura", color = A.text, fontFamily = FontFamily.Serif, fontSize = 44.sp)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                stringResource(R.string.login_tagline),
+                color = A.dim, fontSize = 16.sp, lineHeight = 23.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+            Spacer(Modifier.height(22.dp))
+            PrivacyBox(compact = false)
+            if (device != null) { Spacer(Modifier.height(20.dp)); DeviceCard(vm, device!!) }
+            Spacer(Modifier.height(20.dp))
+        }
+        // the sign-in button and "Skip for now" stay pinned at the bottom: they are never cut off, whatever the screen size
+        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            if (device == null) GithubSignIn(vm)
+            Text(
+                stringResource(R.string.skip_for_now), color = A.dim, fontSize = 14.sp,
+                modifier = Modifier.padding(top = 6.dp, bottom = 10.dp).clip(CircleShape).clickable(onClick = onSkip).padding(horizontal = 16.dp, vertical = 10.dp),
+            )
+        }
     }
 }
 
@@ -390,10 +399,10 @@ fun SettingsScreen(vm: MainVM) {
 
     Column(Modifier.fillMaxSize().background(A.bg).statusBarsPadding().navigationBarsPadding().imePadding()) {
         SkillDialogs(vm, skillDialog, { skillDialog = null }, skillNew, { skillNew = false }, importOpen, { importOpen = false })
-        TopBar("Settings", { vm.go(Route.Chat) })
+        TopBar(stringResource(R.string.settings_title), { vm.go(Route.Chat) })
         LazyColumn(Modifier.weight(1f).testTag("settings-list"), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 40.dp)) {
             item {
-                Section("Model providers") {
+                Section(stringResource(R.string.sec_providers)) {
                     providers.forEach { p ->
                         Row(
                             Modifier.fillMaxWidth().padding(bottom = 10.dp).clip(RoundedCornerShape(16.dp)).background(A.surface)
@@ -412,7 +421,7 @@ fun SettingsScreen(vm: MainVM) {
                             AIcon(R.drawable.ic_chevron_right, tint = A.dim, size = 20.dp)
                         }
                     }
-                    Text("Add a provider", color = A.dim, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp, start = 2.dp))
+                    Text(stringResource(R.string.add_provider), color = A.dim, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp, start = 2.dp))
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf("paste" to "Paste full config", "gemini" to "Gemini", "nvidia" to "NVIDIA", "openai" to "OpenAI", "custom" to "Custom endpoint").forEach { (k, l) ->
                             PillButton(l, { vm.go(Route.Provider(null, k)) }, primary = false, modifier = if (k == "paste") Modifier.testTag("paste-config-add") else Modifier)
@@ -420,21 +429,22 @@ fun SettingsScreen(vm: MainVM) {
                     }
                 }
             }
-            item { Section("GitHub") { GithubSignIn(vm) } }
-            item { Section("Pushing to GitHub") { PushConsentSection(vm) } }
-            item { Section("GitHub Codespace Token (PAT)") { CodespaceToken(vm) } }
-            item { Section("Vercel (deploy websites)") { VercelSection(vm) } }
-            item { Section("Free providers (no API key)") { FreeProvidersSection(vm) } }
-            item { Section("API keys (hidden from the AI)") { VaultSection(vm) } }
-            item { Section("MCP servers") { McpEntry(vm) } }
-            item { Section("Phone folders") { FoldersSection(vm) } }
-            item { Section("Answers") { LongAnswersSection(vm) } }
-            item { Section("Memory") { MemoryEntry(vm) } }
-            item { Section("Voice (read aloud)") { VoiceSection(vm) } }
+            item { Section(stringResource(R.string.sec_language)) { LanguageSection(vm) } }
+            item { Section(stringResource(R.string.sec_github)) { PrivacyBox(compact = true); Spacer(Modifier.height(12.dp)); GithubSignIn(vm) } }
+            item { Section(stringResource(R.string.sec_push)) { PushConsentSection(vm) } }
+            item { Section(stringResource(R.string.sec_codespace)) { CodespaceToken(vm) } }
+            item { Section(stringResource(R.string.sec_vercel)) { VercelSection(vm) } }
+            item { Section(stringResource(R.string.sec_free)) { FreeProvidersSection(vm) } }
+            item { Section(stringResource(R.string.sec_vault)) { VaultSection(vm) } }
+            item { Section(stringResource(R.string.sec_mcp)) { McpEntry(vm) } }
+            item { Section(stringResource(R.string.sec_folders)) { FoldersSection(vm) } }
+            item { Section(stringResource(R.string.sec_answers)) { LongAnswersSection(vm) } }
+            item { Section(stringResource(R.string.sec_memory)) { MemoryEntry(vm) } }
+            item { Section(stringResource(R.string.sec_voice)) { VoiceSection(vm) } }
             item {
                 val guard by vm.store.guardrails.collectAsState()
                 val ctxTokens by vm.store.contextTokens.collectAsState()
-                Section("Agent safety and memory") {
+                Section(stringResource(R.string.sec_safety)) {
                     Row(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(A.surface).border(1.dp, A.border, RoundedCornerShape(16.dp)).padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -476,7 +486,7 @@ fun SettingsScreen(vm: MainVM) {
                 }
             }
             item {
-                Section("Appearance") {
+                Section(stringResource(R.string.sec_appearance)) {
                     Segmented(listOf("system" to "System", "light" to "Light", "dark" to "Dark"), theme) { vm.store.setTheme(it) }
                 }
             }

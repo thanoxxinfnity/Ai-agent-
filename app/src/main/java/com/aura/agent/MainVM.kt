@@ -165,7 +165,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         loginMsg.value = ""
         loginJob = viewModelScope.launch {
             try {
-                if (store.githubClientId.value.isBlank()) a.supabase.loadConfig()
+                if (store.githubClientId.value.isBlank()) a.supabase.loadConfig(force = true)
                 val id = store.githubClientId.value
                 if (id.isBlank()) error("GitHub sign in is not available right now. Check your internet connection and try again.")
                 val d = com.aura.agent.net.GhOAuth.start(id)

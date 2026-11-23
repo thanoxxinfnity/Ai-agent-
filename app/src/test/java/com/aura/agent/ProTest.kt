@@ -37,6 +37,7 @@ class Mock {
     /** answers served first for any /gh/ request (to simulate temporary GitHub errors) */
     val ghFirst = ConcurrentLinkedQueue<MockResponse>()
     @Volatile var gitDiff = ""
+    @Volatile var titleReply: String? = null
     val altRequests = CopyOnWriteArrayList<String>()
     val scriptB = ConcurrentLinkedQueue<MockResponse>()
     val verifyResults = ConcurrentLinkedQueue<String>()
@@ -78,7 +79,7 @@ class Mock {
                     p.startsWith("/v1/chat/completions") -> when {
                         body.contains("research worker") -> if (body.contains("\"role\":\"tool\"")) text("Worker summary: found it in src/A.kt line 3") else if (body.contains("TREE")) tool("find_files", "{\"glob\":\"**/*.kt\",\"repo\":\"r\"}") else text("Worker summary: quick answer")
                         body.contains("Compress this agent transcript") -> { compactCount.incrementAndGet(); text("SUMMARY-OF-OLD-WORK: repo octo/r, file src/A.kt, pending: finish login") }
-                        body.contains("You write chat titles") -> text("A casual chat title for tests")
+                        body.contains("You write chat titles") -> text(titleReply ?: "A casual chat title for tests")
                         else -> { mainRequests += body; script.poll() ?: mainFallback() }
                     }
                     p == "/gh/user" -> json("{\"login\":\"octo\"}").setHeader("X-OAuth-Scopes", "codespace, repo")

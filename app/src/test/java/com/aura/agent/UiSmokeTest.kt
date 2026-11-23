@@ -29,12 +29,8 @@ abstract class UiBase {
         }
     }
 
-    /** Pins the settings list by node id, so it can still be found after scrolling its first items away. */
-    protected fun settingsList(): SemanticsNodeInteraction {
-        val id = rule.onNode(hasScrollAction() and hasAnyDescendant(hasText("Model providers"))).fetchSemanticsNode().id
-        return rule.onNode(SemanticsMatcher("settings list") { it.id == id })
-    }
-
+    /** The scrolling list of the Settings screen, found by its tag so it is found wherever the list is scrolled to. */
+    protected fun settingsList(): SemanticsNodeInteraction = rule.onNodeWithTag("settings-list")
 }
 
 @RunWith(AndroidJUnit4::class)

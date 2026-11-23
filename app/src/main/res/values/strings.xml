@@ -1,3 +1,63 @@
 <resources>
     <string name="app_name">Aura</string>
+
+    <!-- login and privacy -->
+    <string name="login_tagline">Your AI agent that builds apps and ships them through GitHub.</string>
+    <string name="skip_for_now">Skip for now</string>
+    <string name="sign_in_github">Sign in with GitHub</string>
+    <string name="signed_in">Signed in</string>
+    <string name="github_account">GitHub account</string>
+    <string name="sign_out">Sign out</string>
+    <string name="device_enter_code">Enter this code on GitHub</string>
+    <string name="device_copy_open">Copy code and open GitHub</string>
+    <string name="device_waiting">Waiting for you to approve</string>
+    <string name="cancel">Cancel</string>
+    <string name="privacy_title">Your data stays on your device.</string>
+    <string name="privacy_nobackup">There is no data backup. Everything stays only on this phone. GitHub is connected only so the AI can push code there.</string>
+    <string name="privacy_p1">Your chats, memory, API keys and tokens are stored encrypted on this phone only. They are never saved on our servers.</string>
+    <string name="privacy_p2">Connecting GitHub only lets the AI work with the repositories you choose: read files, make changes and run builds. It gets nothing more, and you can disconnect at any time.</string>
+    <string name="privacy_p3">Nothing is pushed to GitHub unless you say yes.</string>
+    <string name="privacy_provider">Chat text goes only to the AI provider you chose.</string>
+    <string name="privacy_short">There is no data backup. GitHub is connected only so the AI can push code to the repositories you choose, and nothing is pushed unless you say yes. Chat text goes only to the AI provider you chose.</string>
+
+    <!-- settings -->
+    <string name="settings_title">Settings</string>
+    <string name="sec_providers">Model providers</string>
+    <string name="add_provider">Add a provider</string>
+    <string name="sec_github">GitHub</string>
+    <string name="sec_push">Pushing to GitHub</string>
+    <string name="sec_codespace">GitHub Codespace Token (PAT)</string>
+    <string name="sec_vercel">Vercel (deploy websites)</string>
+    <string name="sec_free">Free providers (no API key)</string>
+    <string name="sec_vault">API keys (hidden from the AI)</string>
+    <string name="sec_mcp">MCP servers</string>
+    <string name="sec_folders">Phone folders</string>
+    <string name="sec_answers">Answers</string>
+    <string name="sec_memory">Memory</string>
+    <string name="sec_voice">Voice (read aloud)</string>
+    <string name="sec_safety">Agent safety and memory</string>
+    <string name="sec_appearance">Appearance</string>
+    <string name="sec_language">Language</string>
+    <string name="lang_english">English</string>
+    <string name="lang_hindi">हिन्दी</string>
+    <string name="language_hint">The change applies immediately. Texts that are not translated yet stay in English.</string>
+
+    <!-- main chat screen -->
+    <string name="chat_empty">What should we build today?</string>
+    <string name="connect_model">Connect a model first</string>
+    <string name="connect_model_hint">Add Gemini, NVIDIA or any custom endpoint in Settings.</string>
+    <string name="open_settings">Open settings</string>
+    <string name="choose_repository">Choose repository</string>
+    <string name="message_hint">Message Aura, type @ for skills</string>
+    <string name="choose_model">Choose model</string>
+    <string name="photos_images">Photos and images</string>
+    <string name="files">Files</string>
+    <string name="new_chat">New chat</string>
+    <string name="search_chats">Search chats</string>
+    <string name="recent">Recent</string>
+    <string name="rename">Rename</string>
+    <string name="delete">Delete</string>
+    <string name="search_models">Search models</string>
+    <string name="choose_a_repository">Choose a repository</string>
+    <string name="context_label">Context %1$s / %2$s</string>
 </resources>

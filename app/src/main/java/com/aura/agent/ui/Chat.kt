@@ -19,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -167,6 +168,11 @@ fun ChatHost(vm: MainVM) {
                     )
                     val repoLabel = if (chat != null) chat.repo else pendingRepo
                     if (repoLabel.isNotBlank()) Text(repoLabel, color = A.dim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (messages.isNotEmpty()) {
+                        val ctxLimit by vm.store.contextTokens.collectAsState()
+                        val used = remember(messages) { com.aura.agent.agent.ContextMeter.usedTokens(messages) }
+                        ContextGauge(used, ctxLimit, Modifier.padding(top = 2.dp))
+                    }
                 }
                 IconBtn(R.drawable.ic_plus, { vm.openChat(null); input = "" })
             }
@@ -185,7 +191,7 @@ fun ChatHost(vm: MainVM) {
                     ) {
                         AIcon(if (pendingRepo.isNotBlank() && pendingRepo == pinnedRepo) R.drawable.ic_pin else R.drawable.ic_branch, tint = if (pendingRepo.isBlank()) A.dim else A.accent, size = 16.dp)
                         Spacer(Modifier.width(8.dp))
-                        Text(if (pendingRepo.isBlank()) "Choose repository" else pendingRepo, color = if (pendingRepo.isBlank()) A.dim else A.text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 240.dp))
+                        Text(if (pendingRepo.isBlank()) stringResource(R.string.choose_repository) else pendingRepo, color = if (pendingRepo.isBlank()) A.dim else A.text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 240.dp))
                         Spacer(Modifier.width(4.dp))
                         AIcon(R.drawable.ic_chevron_down, tint = A.dim, size = 14.dp)
                     }
@@ -472,18 +478,18 @@ private fun EmptyState(hasModel: Boolean, onSuggest: (String) -> Unit, onSetup: 
         Spacer(Modifier.height(18.dp))
         Text(greeting, color = A.text, fontFamily = FontFamily.Serif, fontSize = 32.sp, fontWeight = FontWeight.Normal)
         Spacer(Modifier.height(6.dp))
-        Text("What should we build today?", color = A.dim, fontSize = 16.sp)
+        Text(stringResource(R.string.chat_empty), color = A.dim, fontSize = 16.sp)
         Spacer(Modifier.height(28.dp))
         if (!hasModel) {
             Column(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).border(1.dp, A.border, RoundedCornerShape(18.dp)).padding(18.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text("Connect a model first", color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                Text(stringResource(R.string.connect_model), color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
                 Spacer(Modifier.height(4.dp))
-                Text("Add Gemini, NVIDIA or any custom endpoint in Settings.", color = A.dim, fontSize = 14.sp)
+                Text(stringResource(R.string.connect_model_hint), color = A.dim, fontSize = 14.sp)
                 Spacer(Modifier.height(14.dp))
-                PillButton("Open settings", onSetup)
+                PillButton(stringResource(R.string.open_settings), onSetup)
             }
         } else {
             listOf(
@@ -528,7 +534,7 @@ private fun Composer(
                 }
             }
             Box(Modifier.fillMaxWidth()) {
-                if (value.isEmpty()) Text("Message Aura, type @ for skills", color = A.dim, fontSize = 16.sp)
+                if (value.isEmpty()) Text(stringResource(R.string.message_hint), color = A.dim, fontSize = 16.sp)
                 BasicTextField(
                     value, onValue, modifier = Modifier.fillMaxWidth().testTag("input"),
                     textStyle = TextStyle(color = A.text, fontSize = 16.sp, lineHeight = 23.sp),
@@ -539,8 +545,8 @@ private fun Composer(
                 Box {
                     IconBtn(R.drawable.ic_attach, { plusMenu = true }, tint = A.dim, size = 38.dp, modifier = Modifier.testTag("attach"))
                     DropdownMenu(plusMenu, { plusMenu = false }) {
-                        DropdownMenuItem(text = { Text("Photos and images") }, leadingIcon = { AIcon(R.drawable.ic_image, size = 18.dp) }, onClick = { plusMenu = false; onPickImages() })
-                        DropdownMenuItem(text = { Text("Files") }, leadingIcon = { AIcon(R.drawable.ic_file, size = 18.dp) }, onClick = { plusMenu = false; onPickFiles() })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.photos_images)) }, leadingIcon = { AIcon(R.drawable.ic_image, size = 18.dp) }, onClick = { plusMenu = false; onPickImages() })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.files)) }, leadingIcon = { AIcon(R.drawable.ic_file, size = 18.dp) }, onClick = { plusMenu = false; onPickFiles() })
                     }
                 }
                 Spacer(Modifier.width(4.dp))
@@ -673,7 +679,7 @@ private fun RepoPicker(vm: MainVM, onDismiss: () -> Unit) {
     LaunchedEffect(Unit) { vm.loadRepos() }
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = A.bg, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(0.88f).padding(horizontal = 16.dp)) {
-            Text("Choose a repository", color = A.text, fontFamily = FontFamily.Serif, fontSize = 24.sp, modifier = Modifier.padding(vertical = 6.dp))
+            Text(stringResource(R.string.choose_a_repository), color = A.text, fontFamily = FontFamily.Serif, fontSize = 24.sp, modifier = Modifier.padding(vertical = 6.dp))
             Text("Pick it now: it is fixed for this chat. The agent can still clone other repositories later.", color = A.dim, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(bottom = 10.dp))
             LazyColumn(Modifier.weight(1f).testTag("repo-list")) {
                 item {
@@ -778,7 +784,7 @@ private fun DrawerContent(
             ) {
                 AIcon(R.drawable.ic_plus, tint = A.onAccent, size = 20.dp)
                 Spacer(Modifier.width(10.dp))
-                Text("New chat", color = A.onAccent, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Text(stringResource(R.string.new_chat), color = A.onAccent, fontSize = 15.sp, fontWeight = FontWeight.Medium)
             }
             Spacer(Modifier.height(10.dp))
             Row(
@@ -788,12 +794,12 @@ private fun DrawerContent(
                 AIcon(R.drawable.ic_search, tint = A.dim, size = 18.dp)
                 Spacer(Modifier.width(10.dp))
                 Box(Modifier.weight(1f)) {
-                    if (query.isEmpty()) Text("Search chats", color = A.dim, fontSize = 15.sp)
+                    if (query.isEmpty()) Text(stringResource(R.string.search_chats), color = A.dim, fontSize = 15.sp)
                     BasicTextField(query, { query = it }, singleLine = true, textStyle = TextStyle(color = A.text, fontSize = 15.sp), cursorBrush = SolidColor(A.accent), modifier = Modifier.fillMaxWidth())
                 }
             }
             Spacer(Modifier.height(10.dp))
-            Text("Recent", color = A.dim, fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp, bottom = 4.dp))
+            Text(stringResource(R.string.recent), color = A.dim, fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp, bottom = 4.dp))
             LazyColumn(Modifier.weight(1f)) {
                 items(list, key = { it.id }) { c ->
                     var menu by remember { mutableStateOf(false) }
@@ -807,8 +813,8 @@ private fun DrawerContent(
                         Box {
                             IconBtn(R.drawable.ic_more, { menu = true }, tint = A.dim, size = 40.dp)
                             DropdownMenu(menu, { menu = false }) {
-                                DropdownMenuItem(text = { Text("Rename") }, leadingIcon = { AIcon(R.drawable.ic_edit, size = 18.dp) }, onClick = { menu = false; renaming = c })
-                                DropdownMenuItem(text = { Text("Delete", color = A.danger) }, leadingIcon = { AIcon(R.drawable.ic_trash, tint = A.danger, size = 18.dp) }, onClick = { menu = false; onDelete(c.id) })
+                                DropdownMenuItem(text = { Text(stringResource(R.string.rename)) }, leadingIcon = { AIcon(R.drawable.ic_edit, size = 18.dp) }, onClick = { menu = false; renaming = c })
+                                DropdownMenuItem(text = { Text(stringResource(R.string.delete), color = A.danger) }, leadingIcon = { AIcon(R.drawable.ic_trash, tint = A.danger, size = 18.dp) }, onClick = { menu = false; onDelete(c.id) })
                             }
                         }
                     }
@@ -820,7 +826,7 @@ private fun DrawerContent(
             ) {
                 AIcon(R.drawable.ic_settings, size = 22.dp)
                 Spacer(Modifier.width(12.dp))
-                Text("Settings", color = A.text, fontSize = 15.sp)
+                Text(stringResource(R.string.settings_title), color = A.text, fontSize = 15.sp)
             }
         }
     }
@@ -849,7 +855,7 @@ private fun ModelPicker(
         Column(Modifier.fillMaxWidth().fillMaxHeight(0.85f).padding(horizontal = 16.dp)) {
             val appCtx = androidx.compose.ui.platform.LocalContext.current.applicationContext as com.aura.agent.App
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Choose model", color = A.text, fontFamily = FontFamily.Serif, fontSize = 24.sp, modifier = Modifier.padding(vertical = 6.dp).weight(1f))
+                Text(stringResource(R.string.choose_model), color = A.text, fontFamily = FontFamily.Serif, fontSize = 24.sp, modifier = Modifier.padding(vertical = 6.dp).weight(1f))
                 IconBtn(R.drawable.ic_refresh, { appCtx.refreshModels(true) }, tint = A.dim)
             }
             if (providers.isEmpty()) {
@@ -866,7 +872,7 @@ private fun ModelPicker(
                 AIcon(R.drawable.ic_search, tint = A.dim, size = 18.dp)
                 Spacer(Modifier.width(10.dp))
                 Box(Modifier.weight(1f)) {
-                    if (q.isEmpty()) Text("Search models", color = A.dim, fontSize = 15.sp)
+                    if (q.isEmpty()) Text(stringResource(R.string.search_models), color = A.dim, fontSize = 15.sp)
                     BasicTextField(q, { q = it }, singleLine = true, textStyle = TextStyle(color = A.text, fontSize = 15.sp), cursorBrush = SolidColor(A.accent), modifier = Modifier.fillMaxWidth())
                 }
             }

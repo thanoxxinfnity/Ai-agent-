@@ -447,3 +447,21 @@ fun PushConsentSection(vm: MainVM) {
         AuraSwitch(on, "ask-push") { vm.extras.setAskBeforePush(it) }
     }
 }
+
+/** A slim "Context 12k / 128k" gauge for the chat header. */
+@Composable
+fun ContextGauge(used: Int, limit: Int, modifier: Modifier = Modifier) {
+    val level = com.aura.agent.agent.ContextMeter.level(used, limit)
+    val color = when (level) { 2 -> A.danger; 1 -> androidx.compose.ui.graphics.Color(0xFFC98A2B); else -> A.accent }
+    val fraction = if (limit <= 0) 0f else (used.toFloat() / limit).coerceIn(0f, 1f)
+    Row(modifier.testTag("context-meter"), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            androidx.compose.ui.res.stringResource(R.string.context_label, com.aura.agent.agent.ContextMeter.format(used), com.aura.agent.agent.ContextMeter.format(limit)),
+            color = if (level == 0) A.dim else color, fontSize = 11.sp, maxLines = 1,
+        )
+        Spacer(Modifier.width(8.dp))
+        Box(Modifier.width(56.dp).height(3.dp).clip(RoundedCornerShape(2.dp)).background(A.border)) {
+            Box(Modifier.fillMaxHeight().fillMaxWidth(fraction).background(color))
+        }
+    }
+}

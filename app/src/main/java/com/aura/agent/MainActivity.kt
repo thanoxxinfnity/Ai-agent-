@@ -43,7 +43,7 @@ class MainActivity : ComponentActivity() {
                     isAppearanceLightNavigationBars = !dark
                 }
             }
-            AuraTheme(dark) { MainScreen(vm) }
+            com.aura.agent.ui.WithAppLanguage(vm) { AuraTheme(dark) { MainScreen(vm) } }
         }
     }
 

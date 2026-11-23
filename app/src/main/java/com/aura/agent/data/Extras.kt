@@ -58,6 +58,12 @@ class Extras(ctx: Context) {
     val longAnswers: StateFlow<Boolean> = _longAnswers.asStateFlow()
     fun setLongAnswers(on: Boolean) { _longAnswers.value = on; prefs.edit().putBoolean("longAnswers", on).apply() }
 
+    // ---- language ----
+    private val _lang = MutableStateFlow(prefs.getString("language", "en").let { if (it == "hi") "hi" else "en" })
+    /** "en" (default) or "hi"; shown in Settings > Language and applied at once */
+    val language: StateFlow<String> = _lang.asStateFlow()
+    fun setLanguage(code: String) { val c = if (code == "hi") "hi" else "en"; _lang.value = c; prefs.edit().putString("language", c).apply() }
+
     // ---- GitHub pushes ----
     private val _askPush = MutableStateFlow(prefs.getBoolean("askBeforePush", true))
     /** on (default): the agent must get a yes before anything is pushed to GitHub */

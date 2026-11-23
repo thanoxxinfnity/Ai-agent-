@@ -153,6 +153,26 @@ object Tokens {
     fun estimate(chars: Int): Int = (chars / 3.5).toInt() + 1
 }
 
+/** How much of the model's context window a chat uses: shown as "12k / 128k" in the chat header. */
+object ContextMeter {
+    /** characters the next request carries: the live (not compacted) messages plus the fixed instructions */
+    fun chars(active: List<com.aura.agent.data.MessageEntity>, systemLength: Int): Int =
+        active.filter { !it.compacted }.sumOf { it.content.length + (it.toolCalls?.length ?: 0) } + systemLength + 3000
+
+    fun usedTokens(messages: List<com.aura.agent.data.MessageEntity>): Int =
+        Tokens.estimate(chars(messages.filter { it.role != "switch" }, AgentRunner.SYSTEM.length))
+
+    fun format(n: Int): String = when {
+        n >= 1_000_000 -> "%.1fM".format(n / 1_000_000.0).replace(".0M", "M")
+        n >= 10_000 -> "${n / 1000}k"
+        n >= 1000 -> "%.1fk".format(n / 1000.0).replace(".0k", "k")
+        else -> n.toString()
+    }
+
+    /** 0 = fine, 1 = getting full (75%+, older steps will be summarized soon), 2 = nearly full (90%+) */
+    fun level(used: Int, limit: Int): Int = if (limit <= 0) 0 else when { used * 100L >= limit * 90L -> 2; used * 100L >= limit * 75L -> 1; else -> 0 }
+}
+
 object Sh {
     /** Single-quote a value for bash. */
     fun q(s: String) = "'" + s.replace("'", "'\\''") + "'"
