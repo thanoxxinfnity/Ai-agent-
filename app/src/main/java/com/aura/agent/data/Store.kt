@@ -24,6 +24,9 @@ data class Provider(
     val headers: Map<String, String> = emptyMap(),
     val models: List<String> = emptyList(),
     val defaultModel: String = "",
+    /** models the provider says are free, and whether it gave price information at all */
+    val free: List<String> = emptyList(),
+    val priced: Boolean = false,
     /** requests per minute this provider allows; 0 = Aura's built-in default for known hosts */
     val rpm: Int = 0,
     /** "auto" sends the reasoning level only to hosts known to accept it; "on" always; "off" never */
@@ -33,6 +36,13 @@ data class Provider(
 )
 
 val AppJson = Json { ignoreUnknownKeys = true; encodeDefaults = true; isLenient = true }
+
+/** True when [model] belongs under the price filter: "free" = the provider says it is free, "paid" = everything else (including models whose price is not stated), "all" = everything. */
+fun Provider.fitsPrice(model: String, filter: String): Boolean = when (filter) {
+    "free" -> model in free
+    "paid" -> model !in free
+    else -> true
+}
 
 /** Everything persistent that is small: encrypted at rest. */
 class Store(ctx: Context) {

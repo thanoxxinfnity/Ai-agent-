@@ -36,34 +36,125 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import java.io.File
 
-/** A file the agent gave the user, shown inside the app. Only types the app can really display are offered a preview. */
+/** A file the agent gave the user, shown inside the app. Only types the app can really display are offered a preview; text can also be edited here. */
 @Composable
-fun FilePreviewDialog(att: Attachment, onDownload: () -> Unit, onShare: () -> Unit, onDismiss: () -> Unit) {
+fun FilePreviewDialog(att: Attachment, startEdit: Boolean, onDownload: () -> Unit, onShare: () -> Unit, onAsk: () -> Unit, onDismiss: () -> Unit) {
     val file = remember(att.path) { File(att.path) }
     val kind = remember(att.path) { Previewable.kind(att.name, att.mime, runCatching { file.inputStream().use { it.readNBytesCompat(8192) } }.getOrDefault(ByteArray(0))) }
+    val canEdit = kind == "text" || kind == "markdown"
+    var editing by remember(att.path, startEdit) { mutableStateOf(startEdit && canEdit) }
+    var version by remember(att.path) { mutableStateOf(0) }
+    var note by remember(att.path) { mutableStateOf("") }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(Modifier.fillMaxSize().background(A.bg).statusBarsPadding().navigationBarsPadding().testTag("file-preview-dialog")) {
             Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     androidx.compose.material3.Text(att.name, color = A.text, fontFamily = FontFamily.Serif, fontSize = 18.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                    androidx.compose.material3.Text(Attachments.human(att.size) + (kind?.let { "  -  preview: $it" } ?: ""), color = A.dim, fontSize = 12.sp)
+                    androidx.compose.material3.Text(Attachments.human(file.length()) + (kind?.let { "  -  preview: $it" } ?: "") + if (editing) "  -  editing" else "", color = A.dim, fontSize = 12.sp)
                 }
+                if (canEdit && !editing) PillButton(androidx.compose.ui.res.stringResource(R.string.file_edit), { editing = true; note = "" }, primary = false, modifier = Modifier.padding(end = 4.dp).testTag("file-edit-open"))
                 androidx.compose.material3.IconButton(onDismiss, Modifier.testTag("file-preview-close")) { AIcon(R.drawable.ic_close, tint = A.dim) }
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                when (kind) {
+                if (editing) EditorBody(file, onSaved = { editing = false; version++; note = "Saved. The changes are in this copy inside Aura; download or share it to take it out." }, onCancel = { editing = false })
+                else when (kind) {
                     "image" -> ImageBody(file)
                     "pdf" -> PdfBody(file)
-                    "markdown" -> TextBody(file, markdown = true)
-                    "text" -> TextBody(file, markdown = false)
+                    "video" -> VideoBody(file)
+                    "audio" -> AudioBody(file)
+                    "markdown" -> key(version) { TextBody(file, markdown = true) }
+                    "text" -> key(version) { TextBody(file, markdown = false) }
                     else -> androidx.compose.material3.Text("This type cannot be previewed here. You can still download or share it.", color = A.dim, modifier = Modifier.padding(24.dp))
                 }
             }
+            if (note.isNotBlank()) androidx.compose.material3.Text(note, color = A.accent, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 4.dp).testTag("file-preview-note"))
             Row(Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PillButton("Download", onDownload, modifier = Modifier.testTag("file-preview-download"))
-                PillButton("Share", onShare, primary = false)
+                PillButton(androidx.compose.ui.res.stringResource(R.string.file_download), onDownload, modifier = Modifier.testTag("file-preview-download"))
+                PillButton(androidx.compose.ui.res.stringResource(R.string.file_share), onShare, primary = false)
+                if (canEdit) PillButton("Ask Aura", onAsk, primary = false, modifier = Modifier.testTag("file-ask"))
             }
         }
+    }
+}
+
+/** Plain-text editor for a text or Markdown file. Saving writes the file in the app; nothing is sent anywhere. */
+@Composable
+private fun EditorBody(file: File, onSaved: () -> Unit, onCancel: () -> Unit) {
+    val loaded by produceState<String?>(null, file.path) {
+        value = withContext(Dispatchers.IO) { runCatching { file.inputStream().use { String(it.readNBytesCompat(Previewable.MAX_TEXT + 1), Charsets.UTF_8) } }.getOrNull() }
+    }
+    val original = loaded
+    if (original == null) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = A.accent, strokeWidth = 2.dp) }; return }
+    if (original.length > Previewable.MAX_TEXT) {
+        Column(Modifier.padding(20.dp)) {
+            androidx.compose.material3.Text("This file is too big to edit here. Download it, or tap Ask Aura to have it changed.", color = A.dim)
+            PillButton("Back", onCancel, primary = false, modifier = Modifier.padding(top = 12.dp))
+        }
+        return
+    }
+    var text by remember(original) { mutableStateOf(original) }
+    var failed by remember { mutableStateOf("") }
+    Column(Modifier.fillMaxSize()) {
+        androidx.compose.foundation.text.BasicTextField(
+            text, { text = it }, textStyle = androidx.compose.ui.text.TextStyle(color = A.text, fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 19.sp),
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(A.accent),
+            modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp).testTag("file-editor"),
+        )
+        if (failed.isNotBlank()) androidx.compose.material3.Text(failed, color = A.danger, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp))
+        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PillButton("Save", {
+                runCatching { file.writeText(text) }.onSuccess { onSaved() }.onFailure { failed = "Could not save: ${it.message}" }
+            }, enabled = text != original, modifier = Modifier.testTag("file-edit-save"))
+            PillButton("Cancel", onCancel, primary = false, modifier = Modifier.testTag("file-edit-cancel"))
+        }
+    }
+}
+
+/** Plays a video with the system player controls. */
+@Composable
+private fun VideoBody(file: File) {
+    androidx.compose.ui.viewinterop.AndroidView(
+        modifier = Modifier.fillMaxSize().testTag("file-preview-video"),
+        factory = { ctx ->
+            android.widget.VideoView(ctx).apply {
+                val mc = android.widget.MediaController(ctx).also { it.setAnchorView(this) }
+                setMediaController(mc)
+                setVideoPath(file.absolutePath)
+                setOnPreparedListener { it.isLooping = false; seekTo(1); }
+                setOnErrorListener { _, _, _ -> true }
+            }
+        },
+        onRelease = { v -> runCatching { v.stopPlayback() } },
+    )
+}
+
+/** A small audio player: play or pause, and where we are. */
+@Composable
+private fun AudioBody(file: File) {
+    var playing by remember(file.path) { mutableStateOf(false) }
+    var failed by remember(file.path) { mutableStateOf(false) }
+    var pos by remember(file.path) { mutableStateOf(0) }
+    var len by remember(file.path) { mutableStateOf(0) }
+    val player = remember(file.path) {
+        runCatching {
+            android.media.MediaPlayer().apply {
+                setDataSource(file.absolutePath); prepare()
+                setOnCompletionListener { playing = false }
+            }
+        }.getOrNull().also { if (it == null) failed = true }
+    }
+    DisposableEffect(player) { onDispose { runCatching { player?.release() } } }
+    LaunchedEffect(playing, player) {
+        len = runCatching { player?.duration ?: 0 }.getOrDefault(0)
+        while (playing) { pos = runCatching { player?.currentPosition ?: 0 }.getOrDefault(0); kotlinx.coroutines.delay(250) }
+    }
+    Column(Modifier.fillMaxSize().padding(24.dp).testTag("file-preview-audio"), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        if (failed) { androidx.compose.material3.Text("This audio could not be played here. Download it to play it with another app.", color = A.dim); return@Column }
+        PillButton(if (playing) "Pause" else "Play", {
+            runCatching { if (playing) player?.pause() else player?.start() }.onSuccess { playing = !playing }.onFailure { failed = true }
+        }, modifier = Modifier.testTag("audio-toggle"))
+        Spacer(Modifier.height(16.dp))
+        androidx.compose.material3.Text("${pos / 1000}s / ${len / 1000}s", color = A.dim, fontSize = 13.sp)
     }
 }
 

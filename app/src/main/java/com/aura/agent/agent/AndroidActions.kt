@@ -40,7 +40,7 @@ object AndroidActions {
     private val known = mapOf(
         "png" to "image/png", "jpg" to "image/jpeg", "jpeg" to "image/jpeg", "webp" to "image/webp", "gif" to "image/gif", "svg" to "image/svg+xml",
         "pdf" to "application/pdf", "apk" to "application/vnd.android.package-archive", "zip" to "application/zip", "json" to "application/json",
-        "txt" to "text/plain", "md" to "text/markdown", "html" to "text/html", "csv" to "text/csv", "mp4" to "video/mp4", "mp3" to "audio/mpeg",
+        "txt" to "text/plain", "md" to "text/markdown", "html" to "text/html", "csv" to "text/csv", "mp4" to "video/mp4", "mp3" to "audio/mpeg", "webm" to "video/webm", "3gp" to "video/3gpp", "mkv" to "video/x-matroska", "m4a" to "audio/mp4", "wav" to "audio/wav", "ogg" to "audio/ogg", "flac" to "audio/flac", "opus" to "audio/ogg", "aac" to "audio/aac",
     )
 
     fun mimeOf(f: File): String {

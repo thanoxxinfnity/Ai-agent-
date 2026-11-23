@@ -64,6 +64,28 @@ class Extras(ctx: Context) {
     val language: StateFlow<String> = _lang.asStateFlow()
     fun setLanguage(code: String) { val c = if (code == "hi") "hi" else "en"; _lang.value = c; prefs.edit().putString("language", c).apply() }
 
+    // ---- speaking style for read-aloud ----
+    private val _vStyle = MutableStateFlow(prefs.getString("voiceStyle", "") ?: "")
+    /** an optional description of how answers should be read, e.g. "slowly, in a calm and friendly voice" */
+    val voiceStyle: StateFlow<String> = _vStyle.asStateFlow()
+    fun setVoiceStyle(v: String) { _vStyle.value = v.take(120); prefs.edit().putString("voiceStyle", v.take(120)).apply() }
+
+    // ---- dictation (mic) ----
+    private val _dEnhance = MutableStateFlow(prefs.getBoolean("dictationEnhance", true))
+    /** tidy dictated text with a model (default on); off = only a quick local clean-up */
+    val dictationEnhance: StateFlow<Boolean> = _dEnhance.asStateFlow()
+    fun setDictationEnhance(on: Boolean) { _dEnhance.value = on; prefs.edit().putBoolean("dictationEnhance", on).apply() }
+    private val _dModel = MutableStateFlow(prefs.getString("dictationModel", "free").let { if (it == "active") "active" else "free" })
+    /** which model tidies dictated text: "free" (a free model if one is connected, default) or "active" (the model chosen for chats) */
+    val dictationModel: StateFlow<String> = _dModel.asStateFlow()
+    fun setDictationModel(v: String) { val c = if (v == "active") "active" else "free"; _dModel.value = c; prefs.edit().putString("dictationModel", c).apply() }
+
+    // ---- model price filter ----
+    private val _priceFilter = MutableStateFlow(prefs.getString("priceFilter", "all").let { if (it == "free" || it == "paid") it!! else "all" })
+    /** which models the pickers show: "all", "free" or "paid" */
+    val priceFilter: StateFlow<String> = _priceFilter.asStateFlow()
+    fun setPriceFilter(v: String) { val c = if (v == "free" || v == "paid") v else "all"; _priceFilter.value = c; prefs.edit().putString("priceFilter", c).apply() }
+
     // ---- GitHub pushes ----
     private val _askPush = MutableStateFlow(prefs.getBoolean("askBeforePush", true))
     /** on (default): the agent must get a yes before anything is pushed to GitHub */

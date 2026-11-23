@@ -519,3 +519,52 @@ fun SecretKeyDialog(ask: com.aura.agent.agent.SecretAsk, onSave: (com.aura.agent
         dismissButton = { TextButton(onCancel, Modifier.testTag("secret-cancel")) { Text("Not now", color = A.dim) } },
     )
 }
+
+/** All / Free / Paid chips for choosing which models to show. */
+@Composable
+fun PriceFilterRow(selected: String, onSelect: (String) -> Unit, modifier: Modifier = Modifier) {
+    Row(modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf("all" to R.string.price_all, "free" to R.string.price_free, "paid" to R.string.price_paid).forEach { (k, label) ->
+            val on = selected == k
+            Text(
+                androidx.compose.ui.res.stringResource(label), color = if (on) A.onAccent else A.text, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                modifier = Modifier.clip(androidx.compose.foundation.shape.CircleShape).background(if (on) A.accent else A.surface).border(1.dp, if (on) A.accent else A.border, androidx.compose.foundation.shape.CircleShape)
+                    .clickable { onSelect(k) }.padding(horizontal = 16.dp, vertical = 8.dp).testTag("price-$k"),
+            )
+        }
+    }
+}
+
+/** A small "Free" tag next to a model name. */
+@Composable
+fun FreeBadge() {
+    Text(androidx.compose.ui.res.stringResource(R.string.price_free), color = A.accent, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+        modifier = Modifier.padding(start = 8.dp).clip(androidx.compose.foundation.shape.CircleShape).background(A.accent.copy(alpha = 0.14f)).padding(horizontal = 8.dp, vertical = 2.dp).testTag("free-badge"))
+}
+
+/** Settings for the microphone: tidy the words with a model, and which model. */
+@Composable
+fun DictationSection(vm: MainVM) {
+    val enhance by vm.extras.dictationEnhance.collectAsState()
+    val which by vm.extras.dictationModel.collectAsState()
+    Text("Tap the mic in the message box and speak. The phone listens by itself (offline when its language pack is installed, so it costs nothing). No beep: Aura keeps the system sounds quiet while you speak. Only the words are ever sent to a model, never your voice.", color = A.dim, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(bottom = 10.dp, start = 2.dp))
+    CardRow {
+        Column(Modifier.weight(1f)) {
+            Text("Tidy what I say (enhance)", color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+            Text("Adds punctuation, removes umm and repeated words, fixes mistakes, keeps your language. You can always show the original.", color = A.dim, fontSize = 13.sp, lineHeight = 18.sp)
+        }
+        AuraSwitch(enhance, "dictation-enhance") { vm.extras.setDictationEnhance(it) }
+    }
+    if (enhance) {
+        Text("Which model tidies it", color = A.dim, fontSize = 12.sp, modifier = Modifier.padding(start = 2.dp, bottom = 4.dp))
+        Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("free" to "A free model (if connected)", "active" to "My chosen model").forEach { (k, label) ->
+                val on = which == k
+                Text(label, color = if (on) A.onAccent else A.text, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier.clip(androidx.compose.foundation.shape.CircleShape).background(if (on) A.accent else A.surface).border(1.dp, if (on) A.accent else A.border, androidx.compose.foundation.shape.CircleShape)
+                        .clickable { vm.extras.setDictationModel(k) }.padding(horizontal = 14.dp, vertical = 8.dp).testTag("dictation-model-$k"))
+            }
+        }
+        Text("Connect a free provider (Settings > Free providers) so cleaning up your speech costs nothing.", color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(start = 2.dp))
+    }
+}

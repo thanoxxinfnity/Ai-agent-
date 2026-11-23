@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import com.aura.agent.data.fitsPrice
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -128,6 +129,15 @@ fun ChatHost(vm: MainVM) {
     val activeProvider by vm.store.activeProvider.collectAsState()
     val activeModel by vm.store.activeModel.collectAsState()
     var input by remember { mutableStateOf("") }
+    val prefill by vm.prefill.collectAsState()
+    val dState by vm.dictation.state.collectAsState()
+    val dPartial by vm.dictation.partial.collectAsState()
+    val appCtxMic = androidx.compose.ui.platform.LocalContext.current
+    fun startDictation() = vm.dictation.start { t -> input = if (input.isBlank()) t else input.trimEnd() + " " + t }
+    val micPermission = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) startDictation() else vm.dictation.error.value = "Aura needs the microphone permission to type what you say. Allow it in the phone's app settings."
+    }
+    LaunchedEffect(prefill) { prefill?.let { input = it; vm.prefill.value = null } }
     var picker by remember { mutableStateOf(false) }
     var repoPicker by remember { mutableStateOf(false) }
     var addRepoMode by remember { mutableStateOf(false) }
@@ -137,7 +147,8 @@ fun ChatHost(vm: MainVM) {
     val pending by vm.pending.collectAsState()
     val attachMsg by vm.attachMsg.collectAsState()
     val previewing by vm.previewFile.collectAsState()
-    previewing?.let { p -> FilePreviewDialog(p, onDownload = { vm.saveFileToPhone(p) }, onShare = { vm.shareFile(p) }, onDismiss = { vm.closePreview() }) }
+    val previewEdit by vm.previewEdit.collectAsState()
+    previewing?.let { p -> FilePreviewDialog(p, startEdit = previewEdit, onDownload = { vm.saveFileToPhone(p) }, onShare = { vm.shareFile(p) }, onAsk = { vm.askAboutFile(p) }, onDismiss = { vm.closePreview() }) }
     val pendingRepo by vm.pendingRepo.collectAsState()
     val pendingExtra by vm.pendingExtra.collectAsState()
     val pinnedRepo by vm.store.pinnedRepo.collectAsState()
@@ -231,6 +242,12 @@ fun ChatHost(vm: MainVM) {
             }
             val voiceErr by vm.voice.error.collectAsState()
             if (voiceErr.isNotBlank()) Text(voiceErr, color = A.danger, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 20.dp).clickable { vm.voice.error.value = "" })
+            val dErr by vm.dictation.error.collectAsState()
+            if (dErr.isNotBlank()) Text(dErr, color = A.danger, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp).clickable { vm.dictation.error.value = "" }.testTag("dictation-error"))
+            val dLast by vm.dictation.last.collectAsState()
+            dLast?.takeIf { it.enhanced && it.shown != it.raw && input.contains(it.shown) }?.let { r ->
+                Text(stringResource(R.string.show_original), color = A.accent, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp).clickable { input = input.replace(r.shown, r.raw); vm.dictation.last.value = null }.testTag("voice-original"))
+            }
             val notice by vm.notice.collectAsState()
             if (notice.isNotBlank()) Text(notice, color = A.accent, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp).clickable { vm.notice.value = "" }.testTag("notice"))
             if (attachMsg.isNotBlank()) Text(attachMsg, color = A.danger, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 20.dp).clickable { vm.attachMsg.value = "" })
@@ -241,15 +258,23 @@ fun ChatHost(vm: MainVM) {
                 mode = thinkMode, onMode = { vm.store.setThinkMode(it) },
                 onModel = { picker = true },
                 onSend = { vm.send(input); input = "" }, onStop = vm::stop,
+                micState = dState, partial = dPartial,
+                onMic = {
+                    val has = androidx.core.content.ContextCompat.checkSelfPermission(appCtxMic, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    if (dState == com.aura.agent.agent.DictationState.Listening) vm.dictation.stop()
+                    else if (has) startDictation() else micPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+                },
             )
         }
     }
 
     if (repoPicker) RepoPicker(vm, attach = addRepoMode, createFirst = newRepoFirst, attached = vm.repoList(chat)) { repoPicker = false; addRepoMode = false; newRepoFirst = false }
     if (foldersSheet) FoldersSheet(vm) { foldersSheet = false }
+    val priceFilter by vm.extras.priceFilter.collectAsState()
     if (picker) ModelPicker(
         providers = providers, activeProvider = activeProvider, activeModel = activeModel, auto = auto,
         onAuto = { vm.store.setAuto(true); picker = false },
+        priceFilter = priceFilter, onPriceFilter = { vm.extras.setPriceFilter(it) },
         onPick = { p, m -> vm.store.select(p, m); picker = false },
         onDismiss = { picker = false }, onSetup = { picker = false; vm.go(Route.Settings) },
     )
@@ -290,7 +315,7 @@ private fun MessageList(messages: List<MessageEntity>, vm: MainVM) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (running) item(key = "thinking") { Thinking(status) }
-        items(reversed, key = { it.id }) { m -> MessageItem(m, liveState, restoreFor[m.id]?.let { t -> cps[t] ?: 0 }, { restoreFor[m.id]?.let { t -> confirmTurn = t } }, voiceState, vm::shareFile, vm::saveFileToPhone, vm::openPreview) { vm.voice.speak(m.id, m.content) } }
+        items(reversed, key = { it.id }) { m -> MessageItem(m, liveState, restoreFor[m.id]?.let { t -> cps[t] ?: 0 }, { restoreFor[m.id]?.let { t -> confirmTurn = t } }, voiceState, vm::shareFile, vm::saveFileToPhone, vm::openPreview, vm::openEditor) { vm.voice.speak(m.id, m.content) } }
     }
     AnimatedVisibility(
         visible = !atBottom, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
@@ -315,7 +340,7 @@ private fun MessageList(messages: List<MessageEntity>, vm: MainVM) {
 }
 
 @Composable
-private fun MessageItem(m: MessageEntity, live: State<Map<String, String>>, restoreCount: Int?, onRestore: () -> Unit, voice: State<com.aura.agent.agent.VoiceState>, onShare: (Attachment) -> Unit, onSave: (Attachment) -> Unit, onPreview: (Attachment) -> Unit, onSpeak: () -> Unit) {
+private fun MessageItem(m: MessageEntity, live: State<Map<String, String>>, restoreCount: Int?, onRestore: () -> Unit, voice: State<com.aura.agent.agent.VoiceState>, onShare: (Attachment) -> Unit, onSave: (Attachment) -> Unit, onPreview: (Attachment) -> Unit, onEdit: (Attachment) -> Unit, onSpeak: () -> Unit) {
     when (m.role) {
         "user" -> UserBubble(m.content, remember(m.attachments) { Attachments.parse(m.attachments) })
         "assistant" -> {
@@ -327,7 +352,7 @@ private fun MessageItem(m: MessageEntity, live: State<Map<String, String>>, rest
         "note" -> {}
         "switch" -> Text(m.content, color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp))
         "summary" -> SummaryRow(m.content)
-        else -> ToolStep(m, live, onShare, onSave, onPreview)
+        else -> ToolStep(m, live, onShare, onSave, onPreview, onEdit)
     }
 }
 
@@ -420,7 +445,7 @@ private fun ErrorRow(text: String) {
 }
 
 @Composable
-private fun ToolStep(m: MessageEntity, live: State<Map<String, String>>, onShare: (Attachment) -> Unit, onSave: (Attachment) -> Unit, onPreview: (Attachment) -> Unit) {
+private fun ToolStep(m: MessageEntity, live: State<Map<String, String>>, onShare: (Attachment) -> Unit, onSave: (Attachment) -> Unit, onPreview: (Attachment) -> Unit, onEdit: (Attachment) -> Unit) {
     var open by remember { mutableStateOf(false) }
     val liveText = live.value[m.id]
     val running = liveText != null
@@ -450,10 +475,18 @@ private fun ToolStep(m: MessageEntity, live: State<Map<String, String>>, onShare
                 Text("${f.name}  -  ${Attachments.human(f.size)}", color = A.dim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             }
             val canPreview = remember(f.path) { com.aura.agent.data.Previewable.kind(f.name, f.mime, runCatching { java.io.File(f.path).inputStream().use { ins -> ByteArray(4096).let { b -> b.copyOf(maxOf(ins.read(b), 0)) } } }.getOrDefault(ByteArray(0))) != null }
-            Row(Modifier.padding(top = 6.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (canPreview) PillButton("Preview", { onPreview(f) }, modifier = Modifier.testTag("file-preview"))
-                PillButton("Download", { onSave(f) }, primary = false, modifier = Modifier.testTag("file-save"))
-                PillButton("Share", { onShare(f) }, primary = false, modifier = Modifier.testTag("file-share"))
+            val canEdit = remember(f.path) { com.aura.agent.data.Previewable.kind(f.name, f.mime).let { it == "text" || it == "markdown" } && f.size <= com.aura.agent.data.Previewable.MAX_TEXT }
+            var fileMenu by remember(f.path) { mutableStateOf(false) }
+            Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (canPreview) PillButton(stringResource(R.string.file_preview), { onPreview(f) }, modifier = Modifier.testTag("file-preview"))
+                Box {
+                    IconBtn(R.drawable.ic_more, { fileMenu = true }, tint = A.dim, modifier = Modifier.testTag("file-menu"))
+                    DropdownMenu(fileMenu, { fileMenu = false }) {
+                        DropdownMenuItem(text = { Text(stringResource(R.string.file_download)) }, leadingIcon = { AIcon(R.drawable.ic_download, size = 18.dp) }, modifier = Modifier.testTag("file-save"), onClick = { fileMenu = false; onSave(f) })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.file_share)) }, leadingIcon = { AIcon(R.drawable.ic_send, size = 18.dp) }, modifier = Modifier.testTag("file-share"), onClick = { fileMenu = false; onShare(f) })
+                        if (canEdit) DropdownMenuItem(text = { Text(stringResource(R.string.file_edit)) }, leadingIcon = { AIcon(R.drawable.ic_edit, size = 18.dp) }, modifier = Modifier.testTag("file-edit"), onClick = { fileMenu = false; onEdit(f) })
+                    }
+                }
             }
         }
         if (expanded) {
@@ -546,6 +579,7 @@ private fun Composer(
     attachments: List<Attachment>, onRemoveAttachment: (Attachment) -> Unit, onPickImages: () -> Unit, onPickFiles: () -> Unit,
     mode: com.aura.agent.agent.ThinkMode, onMode: (com.aura.agent.agent.ThinkMode) -> Unit,
     onModel: () -> Unit, onSend: () -> Unit, onStop: () -> Unit,
+    micState: com.aura.agent.agent.DictationState = com.aura.agent.agent.DictationState.Idle, partial: String = "", onMic: () -> Unit = {},
 ) {
     var modeMenu by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(26.dp)
@@ -561,7 +595,10 @@ private fun Composer(
                 }
             }
             Box(Modifier.fillMaxWidth()) {
-                if (value.isEmpty()) Text(stringResource(R.string.message_hint), color = A.dim, fontSize = 16.sp)
+                if (value.isEmpty()) Text(
+                    when (micState) { com.aura.agent.agent.DictationState.Listening -> partial.ifBlank { stringResource(R.string.listening) }; com.aura.agent.agent.DictationState.Polishing -> stringResource(R.string.polishing); else -> stringResource(R.string.message_hint) },
+                    color = if (micState == com.aura.agent.agent.DictationState.Idle) A.dim else A.accent, fontSize = 16.sp, modifier = Modifier.testTag("input-hint"),
+                )
                 BasicTextField(
                     value, onValue, modifier = Modifier.fillMaxWidth().testTag("input"),
                     textStyle = TextStyle(color = A.text, fontSize = 16.sp, lineHeight = 23.sp),
@@ -615,6 +652,9 @@ private fun Composer(
                     }
                 }
                 Spacer(Modifier.weight(1f))
+                IconBtn(R.drawable.ic_mic, onMic, tint = if (micState == com.aura.agent.agent.DictationState.Listening) A.onAccent else if (micState == com.aura.agent.agent.DictationState.Polishing) A.accent else A.dim, size = 40.dp,
+                    bg = if (micState == com.aura.agent.agent.DictationState.Listening) A.accent else androidx.compose.ui.graphics.Color.Transparent, modifier = Modifier.testTag("mic"))
+                Spacer(Modifier.width(4.dp))
                 val ready = running || value.isNotBlank() || attachments.isNotEmpty()
                 Box(
                     Modifier.size(40.dp).testTag("send").clip(CircleShape)
@@ -874,7 +914,7 @@ private fun DrawerContent(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ModelPicker(
-    providers: List<com.aura.agent.data.Provider>, activeProvider: String, activeModel: String, auto: Boolean, onAuto: () -> Unit,
+    providers: List<com.aura.agent.data.Provider>, activeProvider: String, activeModel: String, auto: Boolean, onAuto: () -> Unit, priceFilter: String, onPriceFilter: (String) -> Unit,
     onPick: (String, String) -> Unit, onDismiss: () -> Unit, onSetup: () -> Unit,
 ) {
     var q by remember { mutableStateOf("") }
@@ -903,7 +943,7 @@ private fun ModelPicker(
                     BasicTextField(q, { q = it }, singleLine = true, textStyle = TextStyle(color = A.text, fontSize = 15.sp), cursorBrush = SolidColor(A.accent), modifier = Modifier.fillMaxWidth())
                 }
             }
-            LazyColumn(Modifier.weight(1f)) {
+            LazyColumn(Modifier.weight(1f).testTag("model-list")) {
                 item(key = "auto") {
                     Row(
                         Modifier.fillMaxWidth().padding(top = 6.dp).clip(RoundedCornerShape(14.dp)).background(if (auto) A.bubble else androidx.compose.ui.graphics.Color.Transparent)
@@ -919,8 +959,9 @@ private fun ModelPicker(
                         if (auto) AIcon(R.drawable.ic_check, tint = A.accent, size = 20.dp)
                     }
                 }
+                item(key = "price-filter") { PriceFilterRow(priceFilter, onPriceFilter, Modifier.padding(top = 6.dp)) }
                 providers.forEach { p ->
-                    val models = (p.models + p.defaultModel).filter { it.isNotBlank() }.distinct().filter { q.isBlank() || it.contains(q, true) }
+                    val models = (p.models + p.defaultModel).filter { it.isNotBlank() }.distinct().filter { q.isBlank() || it.contains(q, true) }.filter { m -> p.fitsPrice(m, priceFilter) }
                     if (models.isNotEmpty()) {
                         item(key = "h-${p.id}") {
                             Text(p.name.uppercase(), color = A.dim, fontSize = 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 14.dp, bottom = 4.dp, start = 4.dp))
@@ -934,7 +975,10 @@ private fun ModelPicker(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Column(Modifier.weight(1f)) {
-                                    Text(m, color = if (why == null) A.text else A.dim.copy(alpha = 0.6f), fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(m, color = if (why == null) A.text else A.dim.copy(alpha = 0.6f), fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                                        if (m in p.free) FreeBadge()
+                                    }
                                     if (why != null) Text(why, color = A.dim, fontSize = 11.sp, lineHeight = 15.sp)
                                 }
                                 if (sel) AIcon(R.drawable.ic_check, tint = A.accent, size = 20.dp)

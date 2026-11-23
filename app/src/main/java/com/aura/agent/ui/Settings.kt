@@ -219,7 +219,6 @@ fun VoiceSection(vm: MainVM) {
     val err by vm.voice.error.collectAsState()
     val female = com.aura.agent.net.GeminiTts.VOICES.firstOrNull { it.name == selected }?.female ?: true
     val usesProviderKey = own.isBlank() && vm.store.voiceKey().isNotBlank()
-    val sample = "Namaste, main Aura hoon. Aap kaise hain?"
     Text(
         "Add your own Gemini API key to hear answers in a natural voice. The key stays on this device. Without a key, Aura reads with your phone's voice.",
         color = A.dim, fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(bottom = 12.dp),
@@ -232,12 +231,14 @@ fun VoiceSection(vm: MainVM) {
         if (wantFemale != female) vm.store.setVoiceName(if (wantFemale) com.aura.agent.net.GeminiTts.DEFAULT_FEMALE else com.aura.agent.net.GeminiTts.DEFAULT_MALE)
     }
     Spacer(Modifier.height(10.dp))
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var sampleNote by remember { mutableStateOf("") }
+    DisposableEffect(Unit) { onDispose { com.aura.agent.agent.VoiceSamples.stop() } }
     com.aura.agent.net.GeminiTts.VOICES.filter { it.female == female }.forEach { v ->
         val sel = v.name == selected
-        val playing = state.id == "voice-preview-" + v.name
         Row(
             Modifier.fillMaxWidth().padding(bottom = 6.dp).clip(RoundedCornerShape(12.dp)).background(if (sel) A.bubble else Color.Transparent)
-                .clickable { vm.store.setVoiceName(v.name); vm.voice.speak("voice-preview-" + v.name, sample) }.padding(start = 14.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
+                .clickable { vm.store.setVoiceName(v.name); sampleNote = "" }.padding(start = 14.dp, top = 4.dp, bottom = 4.dp, end = 4.dp).testTag("voice-${v.name}"),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
@@ -245,12 +246,17 @@ fun VoiceSection(vm: MainVM) {
                 Text(v.style, color = A.dim, fontSize = 12.sp)
             }
             if (sel) AIcon(R.drawable.ic_check, tint = A.accent, size = 18.dp)
-            if (playing && state.loading) CircularProgressIndicator(Modifier.padding(10.dp).size(18.dp), color = A.accent, strokeWidth = 2.dp)
-            else IconBtn(if (playing) R.drawable.ic_stop else R.drawable.ic_speaker, { vm.store.setVoiceName(v.name); vm.voice.speak("voice-preview-" + v.name, sample) }, tint = A.accent, size = 40.dp)
+            // a recording that ships with the app: free to listen to, no request, no credits
+            IconBtn(R.drawable.ic_speaker, { vm.store.setVoiceName(v.name); sampleNote = if (com.aura.agent.agent.VoiceSamples.play(ctx, v.name)) "" else "No sample recording for ${v.name} in this version. The voice is selected and is used when Aura reads an answer." }, tint = A.accent, size = 40.dp, modifier = Modifier.testTag("sample-${v.name}"))
         }
     }
+    if (sampleNote.isNotBlank()) Text(sampleNote, color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 4.dp, start = 2.dp).testTag("sample-note"))
+    Spacer(Modifier.height(12.dp))
+    val style by vm.extras.voiceStyle.collectAsState()
+    Field("Speaking style (optional)", style, { vm.extras.setVoiceStyle(it) }, placeholder = "e.g. slowly, in a calm and friendly voice", tag = "voice-style")
+    Text("Describe how you want answers read in your own words. It is added in front of the text for the Gemini voice.", color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 4.dp, start = 2.dp))
     if (err.isNotBlank()) Text(err, color = A.danger, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 6.dp))
-    Text("Tap a voice to hear it and select it.", color = A.dim, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp, start = 2.dp))
+    Text("Tap a voice to select it. The speaker button plays a short recording that comes with the app, so listening never uses your credits.", color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 8.dp, start = 2.dp))
 }
 
 @Composable
@@ -440,6 +446,7 @@ fun SettingsScreen(vm: MainVM) {
             item { Section(stringResource(R.string.sec_folders)) { FoldersSection(vm) } }
             item { Section(stringResource(R.string.sec_answers)) { LongAnswersSection(vm) } }
             item { Section(stringResource(R.string.sec_memory)) { MemoryEntry(vm) } }
+            item { Section(stringResource(R.string.sec_dictation)) { DictationSection(vm) } }
             item { Section(stringResource(R.string.sec_voice)) { VoiceSection(vm) } }
             item {
                 val guard by vm.store.guardrails.collectAsState()
@@ -608,23 +615,26 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
     var rpm by remember(route) { mutableStateOf(existing?.rpm?.takeIf { it > 0 }?.toString() ?: "") }
     var reasoning by remember(route) { mutableStateOf(existing?.reasoning ?: "auto") }
     var blockedMap by remember(route) { mutableStateOf(existing?.blocked ?: emptyMap()) }
+    var freeList by remember(route) { mutableStateOf(existing?.free ?: emptyList()) }
+    var priced by remember(route) { mutableStateOf(existing?.priced ?: false) }
+    val priceFilter by vm.extras.priceFilter.collectAsState()
 
     fun build() = Provider(
         id = existing?.id ?: Ids.id(), name = name.trim(), baseUrl = baseUrl.trim().trimEnd('/'), apiKey = apiKey.trim(), wire = wire,
         modelsUrl = modelsUrl.trim(),
         headers = headers.lines().mapNotNull { l -> l.split(":", limit = 2).takeIf { it.size == 2 && it[0].isNotBlank() }?.let { it[0].trim() to it[1].trim() } }.toMap(),
         models = models, defaultModel = defaultModel.ifBlank { models.firstOrNull().orEmpty() },
-        rpm = rpm.toIntOrNull()?.coerceIn(0, 100000) ?: 0, reasoning = reasoning, blocked = blockedMap,
+        rpm = rpm.toIntOrNull()?.coerceIn(0, 100000) ?: 0, reasoning = reasoning, blocked = blockedMap, free = freeList.filter { it in models }, priced = priced,
     )
     val built = remember { mutableStateOf<Provider?>(null) }
 
-    val filtered = remember(models, query) { models.filter { query.isBlank() || it.contains(query, true) } }
+    val filtered = remember(models, query, priceFilter, freeList) { models.filter { (query.isBlank() || it.contains(query, true)) && when (priceFilter) { "free" -> it in freeList; "paid" -> it !in freeList; else -> true } } }
 
     Column(Modifier.fillMaxSize().background(A.bg).statusBarsPadding().navigationBarsPadding().imePadding()) {
         TopBar(if (existing == null) "New provider" else "Edit provider", { vm.go(Route.Settings) }) {
             PillButton("Import", { importOpen = true }, primary = false, modifier = Modifier.padding(end = 10.dp))
         }
-        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        LazyColumn(Modifier.weight(1f).testTag("editor-list"), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             item { Spacer(Modifier.height(4.dp)); Field("Name", name, { name = it }, placeholder = "My provider") }
             item { Field("Base URL", baseUrl, { baseUrl = it }, placeholder = "https://api.example.com/v1") }
             item { Field("API key", apiKey, { apiKey = it }, secret = true, placeholder = "sk-...") }
@@ -656,7 +666,7 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
                         scope.launch {
                             vm.fetchModels(build()).onSuccess { full ->
                                 val list = full.models
-                                models = list; blockedMap = full.blocked
+                                models = list; blockedMap = full.blocked; freeList = full.free.toList(); priced = full.priced
                                 if (defaultModel.isBlank() || defaultModel !in list || defaultModel in full.blocked) defaultModel = list.firstOrNull { it !in full.blocked }.orEmpty()
                                 if (list.isEmpty()) error = "The endpoint returned no models. Add one manually below."
                                 else if (full.blocked.isNotEmpty()) error = "${full.blocked.size} models are greyed out: they cannot do normal chat (live, speech, embedding or image models)."
@@ -683,6 +693,7 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
                     }
                 }
             }
+            item { PriceFilterRow(priceFilter, { vm.extras.setPriceFilter(it) }, Modifier.padding(top = 6.dp)); if (!priced && models.isNotEmpty()) Text(stringResource(R.string.price_unknown), color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(bottom = 4.dp)) }
             items(filtered.take(300), key = { it }) { m ->
                 val sel = m == defaultModel
                 val why = blockedMap[m] ?: com.aura.agent.net.ModelGuard.heuristic(m)
@@ -692,7 +703,10 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text(m, color = if (why == null) A.text else A.dim.copy(alpha = 0.6f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(m, color = if (why == null) A.text else A.dim.copy(alpha = 0.6f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                            if (m in freeList) FreeBadge()
+                        }
                         if (why != null) Text(why, color = A.dim, fontSize = 11.sp, lineHeight = 15.sp)
                     }
                     if (sel) { Text("default", color = A.accent, fontSize = 12.sp); Spacer(Modifier.width(6.dp)); AIcon(R.drawable.ic_check, tint = A.accent, size = 18.dp) }

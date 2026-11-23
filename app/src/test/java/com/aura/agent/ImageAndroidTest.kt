@@ -187,8 +187,9 @@ class ImagePreviewUiTest : UiBase() {
         }
         rule.runOnUiThread { vm().openChat("img") }
         assertTrue(text("preview-512x512.png"))
-        rule.onNodeWithTag("file-share").performClick(); rule.waitForIdle()
-        rule.onNodeWithTag("file-save").performClick()
+        fun tap(tag: String) { rule.onNodeWithTag(tag).performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }; rule.waitForIdle() }
+        tap("file-menu"); tap("file-share")
+        tap("file-menu"); tap("file-save")
         val end = System.currentTimeMillis() + 5000
         while (System.currentTimeMillis() < end && !vm().attachMsg.value.startsWith("Saved to")) { Thread.sleep(50); rule.waitForIdle() }
         assertTrue(vm().attachMsg.value, vm().attachMsg.value.startsWith("Saved to"))

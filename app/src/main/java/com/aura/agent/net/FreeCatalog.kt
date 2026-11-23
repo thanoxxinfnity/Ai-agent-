@@ -25,7 +25,7 @@ object FreeCatalog {
 
     /** Model ids to offer. Kilo lists hundreds of paid models too: only the ones its own list marks as free are kept. */
     suspend fun models(e: Entry): ModelList = withContext(Dispatchers.IO) {
-        if (e.id != "kilo") return@withContext Llm.listModelsFull(Provider("tmp", e.name, e.baseUrl, modelsUrl = e.modelsUrl))
+        if (e.id != "kilo") return@withContext Llm.listModelsFull(Provider("tmp", e.name, e.baseUrl, modelsUrl = e.modelsUrl)).let { ModelList(it.models, it.blocked, it.models.toSet(), true) }   // everything here costs nothing
         val body = try {
             Http.client.newCall(Request.Builder().url(e.modelsUrl).header("Accept", "application/json").build()).execute().use {
                 if (!it.isSuccessful) throw LlmError("The provider answered HTTP ${it.code}.", it.code)
@@ -39,6 +39,6 @@ object FreeCatalog {
             outText && ((o["isFree"] as? JsonPrimitive)?.booleanOrNull == true || id.endsWith(":free")) && ModelGuard.heuristic(id) == null
         }.mapNotNull { (it["id"] as? JsonPrimitive)?.contentOrNull }.distinct()
         if (free.isEmpty()) throw LlmError("${e.name} listed no free models right now. Try again later.")
-        ModelList(free.sortedWith(compareByDescending<String> { it == e.preferred }.thenBy { it }), emptyMap())
+        free.sortedWith(compareByDescending<String> { it == e.preferred }.thenBy { it }).let { ModelList(it, emptyMap(), it.toSet(), true) }
     }
 }

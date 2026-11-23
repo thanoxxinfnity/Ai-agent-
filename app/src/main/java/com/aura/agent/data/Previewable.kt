@@ -10,14 +10,18 @@ object Previewable {
         "dockerfile", "vue", "svelte", "tf", "svg", "gitattributes", "editorconfig", "conf", "rst", "tex", "diff", "patch", "lock", "mk", "cmake",
     )
     private val raster = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")
+    private val video = setOf("mp4", "webm", "3gp", "mkv", "m4v")
+    private val audio = setOf("mp3", "m4a", "aac", "wav", "ogg", "oga", "opus", "flac", "amr")
 
-    /** "image", "markdown", "text" or "pdf" when the app can show the file, otherwise null. */
+    /** "image", "markdown", "text", "pdf", "video" or "audio" when the app can show the file, otherwise null. */
     fun kind(name: String, mime: String, sample: ByteArray = ByteArray(0)): String? {
         val ext = name.substringAfterLast('.', "").lowercase()
         val base = name.lowercase()
         return when {
             (mime.startsWith("image/") && !mime.contains("svg") && mime != "image/heic" && mime != "image/avif") || ext in raster -> "image"
             mime == "application/pdf" || ext == "pdf" -> "pdf"
+            mime.startsWith("video/") || ext in video -> "video"
+            mime.startsWith("audio/") || ext in audio -> "audio"
             ext in markdown || mime == "text/markdown" -> "markdown"
             ext in textLike || mime.startsWith("text/") || mime == "application/json" || mime == "application/xml" || mime == "application/javascript" ||
                 base in setOf("dockerfile", "makefile", "readme", "license", "procfile", "gemfile") -> "text"

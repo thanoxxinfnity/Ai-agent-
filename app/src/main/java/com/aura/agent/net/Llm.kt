@@ -41,7 +41,27 @@ data class LlmMsg(
 )
 class ToolDef(val name: String, val description: String, val params: JsonObject)
 
-class ModelList(val models: List<String>, val blocked: Map<String, String>)
+/** [free] = models the provider's own list says cost nothing; [priced] = the list carried price information at all (otherwise nothing is known about cost). */
+class ModelList(val models: List<String>, val blocked: Map<String, String>, val free: Set<String> = emptySet(), val priced: Boolean = false)
+
+/** Reads "is this model free?" out of a /models entry. true = free, false = costs money, null = the entry says nothing about price. */
+object Pricing {
+    private fun num(e: JsonElement?): Double? = (e as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()
+
+    fun isFree(o: JsonObject, id: String): Boolean? {
+        (o["isFree"] as? JsonPrimitive)?.booleanOrNull?.let { return it }
+        val pr = o["pricing"] as? JsonObject
+        if (pr != null) {
+            val p = num(pr["prompt"]); val c = num(pr["completion"])
+            if (p != null && c != null) {
+                if (p == 0.0 && c == 0.0) return true
+                if (p > 0 || c > 0) return false
+            }
+        }
+        if (id.endsWith(":free") || id.endsWith("-free")) return true
+        return if (pr != null) false else null
+    }
+}
 
 object Llm {
     /** base of the exponential backoff for 429/5xx/network errors (tests make it tiny) */
@@ -74,7 +94,7 @@ object Llm {
 
     /** Model ids plus the models that cannot do normal chat. Gemini's own list tells exactly which methods each model supports. */
     suspend fun listModelsFull(p: Provider): ModelList {
-        val names = listModels(p)
+        val (names, free, priced) = fetchModels(p)
         val blocked = LinkedHashMap<String, String>()
         names.forEach { n -> ModelGuard.heuristic(n)?.let { blocked[n] = it } }
         if ("/v1beta/openai" in p.baseUrl && p.apiKey.isNotBlank()) runCatching {
@@ -91,10 +111,13 @@ object Llm {
                 }
             }
         }
-        return ModelList(names, blocked.filterKeys { it in names })
+        return ModelList(names, blocked.filterKeys { it in names }, free, priced)
     }
 
-    suspend fun listModels(p: Provider): List<String> = withContext(Dispatchers.IO) {
+    suspend fun listModels(p: Provider): List<String> = fetchModels(p).first
+
+    /** Model ids, the ids the provider calls free, and whether it said anything about price. */
+    private suspend fun fetchModels(p: Provider): Triple<List<String>, Set<String>, Boolean> = withContext(Dispatchers.IO) {
         val url = p.modelsUrl.ifBlank { p.baseUrl.trimEnd('/') + "/models" }
         val req = Request.Builder().url(url).get().auth(p).build()
         Http.client.newCall(req).execute().use { r ->
@@ -107,13 +130,17 @@ object Llm {
                 root is JsonObject && root["models"] is JsonArray -> root["models"] as JsonArray
                 else -> JsonArray(emptyList())
             }
-            arr.mapNotNull { e ->
-                when (e) {
+            val free = LinkedHashSet<String>(); var priced = false
+            val names = arr.mapNotNull { e ->
+                val id = when (e) {
                     is JsonPrimitive -> e.contentOrNull
                     is JsonObject -> e["id"].str() ?: e["name"].str() ?: e["model"].str()
                     else -> null
                 }?.removePrefix("models/")
+                if (id != null && e is JsonObject) Pricing.isFree(e, id)?.let { priced = true; if (it) free += id }
+                id
             }.filter { it.isNotBlank() }.distinct().sorted()
+            Triple(names, free.filter { it in names }.toSet(), priced)
         }
     }
 

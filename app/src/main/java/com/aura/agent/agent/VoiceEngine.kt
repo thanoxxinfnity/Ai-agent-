@@ -59,6 +59,8 @@ class VoiceEngine(
     private val sink: AudioSink = TrackSink(ctx),
     private val base: () -> String = { GeminiTts.BASE },
     private val phone: PhoneVoice = PhoneVoice(ctx),
+    /** the user's own speaking style ("calm and slow"), added in front of the text */
+    private val style: () -> String = { "" },
 ) : Voice {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, _ -> })
     private var job: Job? = null
@@ -87,10 +89,10 @@ class VoiceEngine(
                 val chunks = SpeechText.chunks(clean)
                 coroutineScope {
                     // fetch the next piece while the current one plays
-                    var next = async { GeminiTts.synth(key, chunks[0], voice, base()) }
+                    var next = async { GeminiTts.synth(key, GeminiTts.styled(style(), chunks[0]), voice, base()) }
                     for (i in chunks.indices) {
                         val audio = next.await()
-                        if (i + 1 < chunks.size) next = async { GeminiTts.synth(key, chunks[i + 1], voice, base()) }
+                        if (i + 1 < chunks.size) next = async { GeminiTts.synth(key, GeminiTts.styled(style(), chunks[i + 1]), voice, base()) }
                         state.value = VoiceState(id, loading = false)
                         sink.play(audio.pcm, audio.rate)
                     }

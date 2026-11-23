@@ -63,4 +63,16 @@
     <string name="workspace_title">Aura वर्कस्पेस</string>
     <string name="workspace_hint">Aura के अंदर का एक निजी फ़ोल्डर। जब आप काम फ़ोन में ही रखना चाहें, तो Aura उसे यहाँ बनाता है।</string>
     <string name="workspace_zip">ZIP के रूप में शेयर करें</string>
+    <string name="file_preview">प्रीव्यू</string>
+    <string name="file_download">डाउनलोड</string>
+    <string name="file_share">शेयर करें</string>
+    <string name="file_edit">एडिट करें</string>
+    <string name="price_all">सभी</string>
+    <string name="price_free">मुफ़्त</string>
+    <string name="price_paid">पेड</string>
+    <string name="price_unknown">यह प्रदाता नहीं बताता कि उसके कौन-से मॉडल मुफ़्त हैं, इसलिए कोई भी मुफ़्त नहीं दिखाया गया।</string>
+    <string name="listening">सुन रहा हूँ...</string>
+    <string name="polishing">आपके शब्द ठीक कर रहा हूँ...</string>
+    <string name="show_original">जो मैंने बोला वही दिखाएँ (असली)</string>
+    <string name="sec_dictation">आवाज़ से टाइपिंग (माइक)</string>
 </resources>

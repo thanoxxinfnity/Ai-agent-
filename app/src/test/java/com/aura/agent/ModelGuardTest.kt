@@ -151,6 +151,7 @@ class ModelPickerBlockedUiTest : UiBase() {
         app.store.select("P", "good-chat"); app.store.setAuto(false)
         rule.waitForIdle()
         rule.onNodeWithText("good-chat").performClick()
+        rule.onNodeWithTag("model-list").performScrollToNode(hasText("gemini-live-x")); rule.waitForIdle()
         assertTrue("picker shows the reason", text("only works over a WebSocket"))
         rule.onNodeWithText("gemini-live-x").performClick(); rule.waitForIdle()
         assertEquals("a blocked model cannot be chosen", "good-chat", app.store.activeModel.value)

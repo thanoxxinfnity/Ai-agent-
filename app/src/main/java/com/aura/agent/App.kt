@@ -53,7 +53,7 @@ class App : Application() {
         supabase = Supabase(store)
         com.aura.agent.net.Llm.onWireLearned = { id, wire -> store.setWire(id, wire) }
         runner = AgentRunner(this)
-        voice = com.aura.agent.agent.VoiceEngine(this, store, base = { geminiBase })
+        voice = com.aura.agent.agent.VoiceEngine(this, store, base = { geminiBase }, style = { extras.voiceStyle.value })
         appScope.launch { supabase.loadConfig() }
         appScope.launch { CloudSession.recover(store, ::codespacePat) }
         val nm = getSystemService(NotificationManager::class.java)
@@ -101,7 +101,7 @@ class App : Application() {
                     if (list.isEmpty()) continue
                     val cur = store.providers.value.firstOrNull { it.id == p.id } ?: continue
                     val keep = if (cur.defaultModel.isNotBlank() && cur.defaultModel !in list) list + cur.defaultModel else list
-                    store.saveProviders(store.providers.value.map { if (it.id == p.id) cur.copy(models = keep.distinct(), blocked = full?.blocked.orEmpty()) else it })
+                    store.saveProviders(store.providers.value.map { if (it.id == p.id) cur.copy(models = keep.distinct(), blocked = full?.blocked.orEmpty(), free = full?.free.orEmpty().toList(), priced = full?.priced == true) else it })
                 }
                 store.modelsRefreshedAt = System.currentTimeMillis()
             } finally {

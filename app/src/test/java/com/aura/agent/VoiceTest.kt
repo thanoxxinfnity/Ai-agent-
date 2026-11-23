@@ -110,7 +110,7 @@ class GeminiTtsTest {
     }
 
     @Test fun every_listed_voice_has_a_gender_and_defaults_exist() {
-        assertEquals(4, GeminiTts.VOICES.count { it.female }); assertEquals(4, GeminiTts.VOICES.count { !it.female })
+        assertEquals(14, GeminiTts.VOICES.count { it.female }); assertEquals(16, GeminiTts.VOICES.count { !it.female })
         assertTrue(GeminiTts.VOICES.any { it.name == GeminiTts.DEFAULT_FEMALE && it.female })
         assertTrue(GeminiTts.VOICES.any { it.name == GeminiTts.DEFAULT_MALE && !it.female })
     }
@@ -156,6 +156,18 @@ class VoiceEngineTest {
         assertTrue(sink.played.all { it.second == 24000 })
         assertTrue(log.all { it.body.readUtf8().contains("\"voiceName\":\"Puck\"") })
         assertEquals("", v.error.value)
+    }
+
+    @Test fun the_users_speaking_style_goes_in_front_of_every_piece_and_nothing_extra_without_one() {
+        val (app, s, log) = env()
+        app.store.setVoiceKey("AQ.test-key-value"); app.store.setVoiceName("Kore")
+        var style = "slowly, in a calm and friendly voice."
+        val v = VoiceEngine(app, app.store, FakeSink(), { s.url("/v1beta").toString().trimEnd('/') }, FakePhone(app), { style })
+        v.speak("m1", "Hello there my friend."); waitIdle(v)
+        assertTrue(log.first().body.readUtf8().contains("Say the following slowly, in a calm and friendly voice: Hello there my friend."))
+        style = ""; log.clear()
+        v.speak("m2", "Plain text."); waitIdle(v)
+        val b = log.first().body.readUtf8(); assertTrue(b.contains("\"text\":\"Plain text.\"") && !b.contains("Say the following"))
     }
 
     @Test fun without_a_key_the_phone_voice_is_used_and_gemini_is_never_called() {
@@ -228,17 +240,50 @@ class VoiceUiTest : UiBase() {
         assertEquals("a" to "Hello, this is the answer.", fake.spoken.single())
         // settings
         rule.runOnUiThread { vm().go(Route.Settings) }; rule.waitForIdle()
-        settingsList().performScrollToNode(hasText("Tap a voice to hear it and select it.")); rule.waitForIdle()
+        settingsList().performScrollToNode(hasText("Tap a voice to select it.", substring = true)); rule.waitForIdle()
         assertTrue(text("Voice (read aloud)") || text("Gemini API key for voice"))
         assertTrue(text("Female") && text("Male"))
         app.store.setVoiceName("Kore")
+        settingsList().performScrollToNode(hasText("Male")); rule.waitForIdle()
         rule.onNodeWithText("Male").performClick(); rule.waitForIdle()
         assertEquals("male default voice", "Charon", app.store.voiceName())
+        settingsList().performScrollToNode(hasTestTag("voice-Puck")); rule.waitForIdle()
         assertTrue(text("Puck"))
+        val spokenBefore = fake.spoken.size
+        settingsList().performScrollToNode(hasTestTag("voice-Fenrir")); rule.waitForIdle()
         rule.onNodeWithText("Fenrir").performClick(); rule.waitForIdle()
         assertEquals("Fenrir", app.store.voiceName())
-        assertEquals("voice-preview-Fenrir", fake.spoken.last().first)
+        assertEquals("choosing a voice never calls the voice service, so it never uses credits", spokenBefore, fake.spoken.size)
+        settingsList().performScrollToNode(hasText("Female")); rule.waitForIdle()
         rule.onNodeWithText("Female").performClick(); rule.waitForIdle()
         assertEquals("Kore", app.store.voiceName())
+    }
+}
+
+class VoiceCatalogTest {
+    @Test fun all_thirty_gemini_voices_are_listed_once_with_a_character() {
+        val v = com.aura.agent.net.GeminiTts.VOICES
+        assertEquals(30, v.size); assertEquals(30, v.map { it.name }.toSet().size); assertTrue(v.all { it.style.isNotBlank() })
+        assertTrue(v.any { it.female } && v.any { !it.female }); assertTrue(v.any { it.name == com.aura.agent.net.GeminiTts.DEFAULT_FEMALE && it.female } && v.any { it.name == com.aura.agent.net.GeminiTts.DEFAULT_MALE && !it.female })
+        assertEquals("Say the following calm: hi", com.aura.agent.net.GeminiTts.styled("calm.", "hi")); assertEquals("hi", com.aura.agent.net.GeminiTts.styled("  ", "hi"))
+    }
+}
+
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [34])
+class VoiceSampleUiTest : UiBase() {
+    @Test fun a_voice_without_a_bundled_sample_says_so_and_never_calls_the_api_and_the_style_is_saved() {
+        rule.onNodeWithText("Skip for now").performClick(); rule.waitForIdle()
+        val app = rule.activity.application as App
+        val fake = FakeVoice(); app.voice = fake
+        assertFalse(com.aura.agent.agent.VoiceSamples.has(app, "Kore"))
+        rule.runOnUiThread { vm().go(Route.Settings) }; rule.waitForIdle()
+        settingsList().performScrollToNode(hasTestTag("voice-Kore")); rule.waitForIdle()
+        rule.onNodeWithTag("sample-Kore").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }; rule.waitForIdle()
+        assertTrue(text("No sample recording for Kore")); assertTrue("it still selects the voice", vm().store.voiceName() == "Kore"); assertTrue("no voice request", fake.spoken.isEmpty())
+        settingsList().performScrollToNode(hasTestTag("voice-style")); rule.waitForIdle()
+        rule.onNodeWithTag("voice-style").performTextInput("slowly and calmly"); rule.waitForIdle()
+        assertEquals("slowly and calmly", vm().extras.voiceStyle.value)
+        vm().extras.setVoiceStyle("")
     }
 }

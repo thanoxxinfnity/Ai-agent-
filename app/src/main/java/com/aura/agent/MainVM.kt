@@ -157,6 +157,11 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     }
     fun go(r: Route) { route.value = r }
 
+    /** Mic dictation: the phone listens, a model tidies the words, the text lands in the message box. */
+    val dictation = com.aura.agent.agent.Dictation(a, com.aura.agent.agent.AndroidSpeechEngine(a), com.aura.agent.agent.AndroidStreams(a), viewModelScope)
+
+    override fun onCleared() { dictation.release(); super.onCleared() }
+
     /** A short message above the message box, for example "key saved". */
     val notice = MutableStateFlow("")
 
@@ -293,8 +298,14 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     }
 
     val previewFile = MutableStateFlow<Attachment?>(null)
-    fun openPreview(att: Attachment) { previewFile.value = att }
-    fun closePreview() { previewFile.value = null }
+    /** the preview opens straight in edit mode (from the file card's menu) */
+    val previewEdit = MutableStateFlow(false)
+    /** text to put in the message box, for example "Edit report.md: " */
+    val prefill = MutableStateFlow<String?>(null)
+    fun openPreview(att: Attachment) { previewEdit.value = false; previewFile.value = att }
+    fun openEditor(att: Attachment) { previewEdit.value = true; previewFile.value = att }
+    fun closePreview() { previewFile.value = null; previewEdit.value = false }
+    fun askAboutFile(att: Attachment) { prefill.value = "Please change the file ${att.name}: "; closePreview() }
 
     fun saveFileToPhone(att: Attachment) {
         viewModelScope.launch(Dispatchers.IO) { attachMsg.value = com.aura.agent.agent.AndroidActions.saveToPhone(a, java.io.File(att.path)) }
@@ -328,7 +339,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         val list = com.aura.agent.net.FreeCatalog.models(e)
         val old = com.aura.agent.net.FreeCatalog.connected(e, store.providers.value)
         val p = (old ?: Provider(id = Ids.id(), name = e.name, baseUrl = e.baseUrl, modelsUrl = e.modelsUrl))
-            .copy(models = list.models, blocked = list.blocked, defaultModel = list.models.first())
+            .copy(models = list.models, blocked = list.blocked, free = list.models, priced = true, defaultModel = list.models.first())
         store.upsertProvider(p)
         if (store.activeProvider.value != p.id) store.select(p.id, p.defaultModel)
         "${list.models.size} free models connected"

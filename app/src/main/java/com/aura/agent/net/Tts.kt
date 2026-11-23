@@ -16,10 +16,20 @@ object GeminiTts {
     const val MODEL = "gemini-3.8-flash-tts"
     const val FALLBACK_MODEL = "gemini-2.5-flash-preview-tts"
 
+    /** Gemini's 30 ready-made voices. The character words come from Google; female/male is the usual way these voices are described. */
     val VOICES = listOf(
         VoiceInfo("Kore", true, "Firm"), VoiceInfo("Zephyr", true, "Bright"), VoiceInfo("Aoede", true, "Breezy"), VoiceInfo("Leda", true, "Youthful"),
+        VoiceInfo("Callirrhoe", true, "Easy-going"), VoiceInfo("Autonoe", true, "Bright"), VoiceInfo("Despina", true, "Smooth"), VoiceInfo("Erinome", true, "Clear"),
+        VoiceInfo("Laomedeia", true, "Upbeat"), VoiceInfo("Achernar", true, "Soft"), VoiceInfo("Gacrux", true, "Mature"), VoiceInfo("Pulcherrima", true, "Forward"),
+        VoiceInfo("Vindemiatrix", true, "Gentle"), VoiceInfo("Sulafat", true, "Warm"),
         VoiceInfo("Puck", false, "Upbeat"), VoiceInfo("Charon", false, "Informative"), VoiceInfo("Fenrir", false, "Excitable"), VoiceInfo("Orus", false, "Firm"),
+        VoiceInfo("Enceladus", false, "Breathy"), VoiceInfo("Iapetus", false, "Clear"), VoiceInfo("Umbriel", false, "Easy-going"), VoiceInfo("Algieba", false, "Smooth"),
+        VoiceInfo("Algenib", false, "Gravelly"), VoiceInfo("Rasalgethi", false, "Informative"), VoiceInfo("Alnilam", false, "Firm"), VoiceInfo("Schedar", false, "Even"),
+        VoiceInfo("Achird", false, "Friendly"), VoiceInfo("Zubenelgenubi", false, "Casual"), VoiceInfo("Sadachbia", false, "Lively"), VoiceInfo("Sadaltager", false, "Knowledgeable"),
     )
+
+    /** The text with the user's own speaking style in front ("calm and slow"). The model reads the instruction aloud-free: it only shapes the voice. */
+    fun styled(style: String, text: String): String = if (style.isBlank()) text else "Say the following ${style.trim().trimEnd('.', ':')}: $text"
     const val DEFAULT_FEMALE = "Kore"
     const val DEFAULT_MALE = "Charon"
 

@@ -18,13 +18,14 @@ class PreviewableTest {
     @Test fun supported_types_are_previewed() {
         assertEquals("image", k("a.png", "image/png")); assertEquals("image", k("b.JPG", "image/jpeg")); assertEquals("image", k("c.webp", "image/webp")); assertEquals("image", k("d.gif"))
         assertEquals("pdf", k("r.pdf", "application/pdf")); assertEquals("pdf", k("x.PDF"))
+        assertEquals("video", k("clip.mp4", "video/mp4")); assertEquals("video", k("a.WEBM")); assertEquals("video", k("b.3gp")); assertEquals("audio", k("song.mp3", "audio/mpeg")); assertEquals("audio", k("v.m4a")); assertEquals("audio", k("x.wav")); assertEquals("audio", k("n.opus"))
         assertEquals("markdown", k("README.md", "text/markdown")); assertEquals("markdown", k("notes.markdown"))
         for (n in listOf("a.txt", "Main.kt", "app.py", "data.json", "t.csv", "page.html", "style.css", "build.gradle", "conf.yaml", "x.log", "icon.svg", "Dockerfile", "Makefile", "run.sh", ".gitignore")) assertEquals(n, "text", k(n))
         assertEquals("text", k("data", "application/json")); assertEquals("text", k("notes", "text/plain"))
     }
 
     @Test fun unsupported_types_are_not_previewed() {
-        for (n in listOf("app.apk", "bundle.zip", "doc.docx", "sheet.xlsx", "slides.pptx", "movie.mp4", "song.mp3", "lib.so", "photo.heic", "a.tar.gz", "tool.jar", "x.aab", "blob.bin")) assertNull(n, k(n))
+        for (n in listOf("app.apk", "bundle.zip", "doc.docx", "sheet.xlsx", "slides.pptx", "lib.so", "photo.heic", "a.tar.gz", "tool.jar", "x.aab", "blob.bin")) assertNull(n, k(n))
         assertNull(k("pic.heic", "image/heic")); assertNull(k("doc.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
     }
 
@@ -123,8 +124,11 @@ class FileCardUiTest : UiBase() {
         rule.onNodeWithText("Skip for now").performClick(); rule.waitForIdle()
         // text: code
         seed("t1", file("Main.kt", "fun main() {\n    println(\"hi\")\n}".toByteArray()), "text/x-kotlin", "file")
-        assertTrue(text("Main.kt")); rule.onNodeWithTag("file-preview").assertExists(); rule.onNodeWithTag("file-save").assertExists(); rule.onNodeWithTag("file-share").assertExists()
+        assertTrue(text("Main.kt")); rule.onNodeWithTag("file-preview").assertExists(); rule.onNodeWithTag("file-menu").assertExists()
+        rule.onNodeWithTag("file-menu").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }; rule.waitForIdle()
+        rule.onNodeWithTag("file-save").assertExists(); rule.onNodeWithTag("file-share").assertExists(); rule.onNodeWithTag("file-edit").assertExists()
         assertTrue(text("Download"))
+        rule.onNodeWithTag("file-save").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }; rule.waitForIdle()   // closes the menu
         rule.onNodeWithTag("file-preview").performClick(); rule.waitForIdle()
         assertTrue("dialog", text("preview: text")); assertTrue("content", text("println"))
         rule.onNodeWithTag("file-preview-close").performClick(); rule.waitForIdle()
@@ -144,6 +148,71 @@ class FileCardUiTest : UiBase() {
         // an apk cannot be previewed but can be downloaded and shared
         seed("t5", file("app.apk", byteArrayOf(80, 75, 3, 4, 1, 2)), "application/vnd.android.package-archive", "file")
         assertTrue(text("app.apk")); assertTrue("no preview button for an unsupported type", rule.onAllNodesWithTag("file-preview").fetchSemanticsNodes().isEmpty())
+        rule.onNodeWithTag("file-menu").assertExists()
+        rule.onNodeWithTag("file-menu").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }; rule.waitForIdle()
         rule.onNodeWithTag("file-save").assertExists(); rule.onNodeWithTag("file-share").assertExists()
+        assertTrue("an apk cannot be edited", rule.onAllNodesWithTag("file-edit").fetchSemanticsNodes().isEmpty())
+    }
+}
+
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [34])
+class FileEditorUiTest : UiBase() {
+    private fun tap(tag: String) { rule.onNodeWithTag(tag).performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }; rule.waitForIdle() }
+
+    @Test fun a_text_file_is_edited_in_place_saved_and_the_preview_shows_the_change() {
+        rule.onNodeWithText("Skip for now").performClick(); rule.waitForIdle()
+        val app = rule.activity.application as App
+        val f = File(app.filesDir, "generated/notes.md").apply { parentFile!!.mkdirs(); writeText("# Old title\n\nBody") }
+        val att = Attachment(f.name, "text/markdown", f.length(), f.absolutePath, "file")
+        runBlocking {
+            val dao = app.db.dao(); dao.upsertChat(ChatEntity("ed", "Edit chat", Ids.now(), Ids.now(), titled = true))
+            dao.upsertMessage(MessageEntity("u", "ed", "user", "give me notes.md", Ids.now()))
+            dao.upsertMessage(MessageEntity("t", "ed", "tool", "Gave the user notes.md", Ids.now(), toolCallId = "c", toolName = "send_file", toolArgs = "{}", attachments = Attachments.toJson(listOf(att))))
+        }
+        rule.runOnUiThread { vm().openChat("ed") }; rule.waitForIdle()
+        assertTrue(text("Gave the user notes.md") || text("notes.md"))
+        // the three-dots menu on the card opens the editor straight away
+        tap("file-menu"); tap("file-edit")
+        assertTrue("editor opens", text("editing")); rule.onNodeWithTag("file-editor", useUnmergedTree = true).assertExists()
+        rule.onNodeWithTag("file-edit-save").assertIsNotEnabled()   // nothing changed yet
+        rule.onNodeWithTag("file-editor", useUnmergedTree = true).performTextClearance(); rule.onNodeWithTag("file-editor", useUnmergedTree = true).performTextInput("# New title\n\nChanged body"); rule.waitForIdle()
+        tap("file-edit-save")
+        assertEquals("# New title\n\nChanged body", f.readText())
+        assertTrue("saved note", text("Saved.")); assertTrue("the preview now shows the new text", text("New title"))
+        // cancel keeps the file as it is
+        tap("file-edit-open"); rule.onNodeWithTag("file-editor", useUnmergedTree = true).performTextInput(" more"); tap("file-edit-cancel")
+        assertEquals("# New title\n\nChanged body", f.readText())
+        // Ask Aura puts a request in the message box
+        tap("file-ask"); rule.waitForIdle()
+        assertTrue("the box is prefilled", text("Please change the file notes.md:")); assertTrue("dialog closed", rule.onAllNodesWithTag("file-preview-dialog").fetchSemanticsNodes().isEmpty())
+    }
+}
+
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [34])
+class FileMediaUiTest : UiBase() {
+    @Test fun video_and_audio_files_get_a_player_and_a_broken_audio_file_says_so() {
+        rule.onNodeWithText("Skip for now").performClick(); rule.waitForIdle()
+        val app = rule.activity.application as App
+        fun seed(id: String, name: String, mime: String, bytes: ByteArray) {
+            val f = File(app.filesDir, "generated/$name").apply { parentFile!!.mkdirs(); writeBytes(bytes) }
+            val att = Attachment(f.name, mime, f.length(), f.absolutePath, "file")
+            runBlocking {
+                val dao = app.db.dao(); dao.upsertChat(ChatEntity(id, "Chat $id", Ids.now(), Ids.now(), titled = true))
+                dao.upsertMessage(MessageEntity("u$id", id, "user", "give me $name", Ids.now()))
+                dao.upsertMessage(MessageEntity("t$id", id, "tool", "Gave the user $name", Ids.now(), toolCallId = "c$id", toolName = "send_file", toolArgs = "{}", attachments = Attachments.toJson(listOf(att))))
+            }
+            rule.runOnUiThread { vm().openChat(id) }; rule.waitForIdle()
+            assertTrue(text(name))
+        }
+        fun tap(tag: String) { rule.onNodeWithTag(tag).performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }; rule.waitForIdle() }
+        seed("v1", "clip.mp4", "video/mp4", ByteArray(64) { it.toByte() })
+        tap("file-preview"); assertTrue(text("preview: video")); rule.onNodeWithTag("file-preview-video").assertExists(); tap("file-preview-close")
+        seed("a1", "tune.mp3", "audio/mpeg", ByteArray(64) { 1 })
+        tap("file-preview"); assertTrue(text("preview: audio")); assertTrue("an unreadable audio file is explained instead of crashing", text("could not be played") || rule.onAllNodesWithTag("audio-toggle").fetchSemanticsNodes().isNotEmpty())
+        tap("file-preview-close")
+        // video and audio cannot be edited
+        tap("file-menu"); assertTrue(rule.onAllNodesWithTag("file-edit").fetchSemanticsNodes().isEmpty())
     }
 }

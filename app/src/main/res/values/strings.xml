@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Aura</string>
+    <string name="app_name" translatable="false">Aura</string>
 
     <!-- login and privacy -->
     <string name="login_tagline">Your AI agent that builds apps and ships them through GitHub.</string>
@@ -38,8 +38,8 @@
     <string name="sec_safety">Agent safety and memory</string>
     <string name="sec_appearance">Appearance</string>
     <string name="sec_language">Language</string>
-    <string name="lang_english">English</string>
-    <string name="lang_hindi">हिन्दी</string>
+    <string name="lang_english" translatable="false">English</string>
+    <string name="lang_hindi" translatable="false">हिन्दी</string>
     <string name="language_hint">The change applies immediately. Texts that are not translated yet stay in English.</string>
 
     <!-- main chat screen -->
@@ -67,4 +67,16 @@
     <string name="workspace_title">Aura workspace</string>
     <string name="workspace_hint">A private folder inside Aura. When you want work kept on the phone, Aura builds it here.</string>
     <string name="workspace_zip">Share as ZIP</string>
+    <string name="file_preview">Preview</string>
+    <string name="file_download">Download</string>
+    <string name="file_share">Share</string>
+    <string name="file_edit">Edit</string>
+    <string name="price_all">All</string>
+    <string name="price_free">Free</string>
+    <string name="price_paid">Paid</string>
+    <string name="price_unknown">This provider does not say which of its models are free, so none are marked free.</string>
+    <string name="listening">Listening...</string>
+    <string name="polishing">Tidying your words...</string>
+    <string name="show_original">Show what I said (original)</string>
+    <string name="sec_dictation">Voice typing (microphone)</string>
 </resources>
