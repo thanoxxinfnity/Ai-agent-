@@ -12,6 +12,10 @@ class RunState {
     @Volatile var nudges = 0
     val callCounts = java.util.concurrent.ConcurrentHashMap<String, Int>()
     @Volatile var repoDir: String? = null
+    /** (call + result) -> how many times it happened: identical results mean no progress */
+    val sameResult = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    @Volatile var errorStreak = 0
+    @Volatile var ciFailures = 0
     val snapshotted = java.util.Collections.synchronizedSet(HashSet<String>())
 
     fun markModified() { modified = true; verified = false }

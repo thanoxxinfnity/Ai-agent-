@@ -26,6 +26,7 @@ class Mock {
     val bodies = CopyOnWriteArrayList<Pair<String, String>>()
     val script = ConcurrentLinkedQueue<MockResponse>()
     val mainRequests = CopyOnWriteArrayList<String>()
+    val compactCount = java.util.concurrent.atomic.AtomicInteger()
     val altRequests = CopyOnWriteArrayList<String>()
     val scriptB = ConcurrentLinkedQueue<MockResponse>()
     val verifyResults = ConcurrentLinkedQueue<String>()
@@ -55,12 +56,14 @@ class Mock {
                     p.startsWith("/gh/repos/octo/r/contents/uploads/") || p.startsWith("/gh/repos/octo/r/contents/data.bin") -> if (r.method == "GET") json("{}", 404) else json("{}", 201)
                     p.startsWith("/v1/chat/completions") -> when {
                         body.contains("research worker") -> if (body.contains("\"role\":\"tool\"")) text("Worker summary: found it in src/A.kt line 3") else if (body.contains("TREE")) tool("find_files", "{\"glob\":\"**/*.kt\",\"repo\":\"r\"}") else text("Worker summary: quick answer")
-                        body.contains("Compress this agent transcript") -> text("SUMMARY-OF-OLD-WORK: repo octo/r, file src/A.kt, pending: finish login")
+                        body.contains("Compress this agent transcript") -> { compactCount.incrementAndGet(); text("SUMMARY-OF-OLD-WORK: repo octo/r, file src/A.kt, pending: finish login") }
                         body.contains("You write chat titles") -> text("A casual chat title for tests")
                         else -> { mainRequests += body; script.poll() ?: mainFallback() }
                     }
                     p == "/gh/user" -> json("{\"login\":\"octo\"}").setHeader("X-OAuth-Scopes", "codespace, repo")
                     p == "/gh/repos/octo/r" -> json("{\"default_branch\":\"main\"}")
+                    p.startsWith("/gh/repos/octo/r/actions/runs/") -> json("{\"status\":\"completed\",\"conclusion\":\"failure\",\"html_url\":\"https://github.com/octo/r/actions/runs/1\"}")
+                    p.contains("/actions/workflows/") -> json("{}", 204)
                     p.startsWith("/gh/repos/octo/r/contents/src/A.kt") -> if (r.method == "GET") json("{\"sha\":\"s1\",\"content\":\"${b64(SRC)}\"}") else json("{}")
                     p == "/gh/repos/octo/r/git/ref/heads/main" -> if (r.method == "GET") json("{\"object\":{\"sha\":\"h1\"}}") else json("{}")
                     p == "/gh/repos/octo/r/git/refs" -> json("{}", 201)

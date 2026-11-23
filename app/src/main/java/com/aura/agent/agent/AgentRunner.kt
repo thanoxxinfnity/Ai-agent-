@@ -94,14 +94,15 @@ class AgentRunner(private val app: App) {
             return c
         }
         try {
-            repeat(MAX_STEPS) {
+            repeat(MAX_STEPS) { stepIdx ->
+                val stepNo = stepIdx + 1
                 val msgs = dao.messagesOnce(chatId)
                 // drop an empty assistant placeholder left by an interrupted run
                 msgs.lastOrNull()?.takeIf { it.role == "assistant" && it.content.isBlank() && it.toolCalls == null }?.let { dao.deleteMessage(it.id) }
                 val history = dao.messagesOnce(chatId)
                 val pending = pendingCalls(history)
                 if (pending.isNotEmpty()) {
-                    for (c in pending) execTool(chatId, c, ::mk)
+                    for (c in pending) execTool(chatId, c, ::mk, stepNo)
                     return@repeat
                 }
                 val last = history.lastOrNull() ?: return@repeat
@@ -240,8 +241,8 @@ class AgentRunner(private val app: App) {
         buildJsonObject { put("id", it.id); put("name", it.name); put("args", it.args) }
     }).toString()
 
-    private suspend fun execTool(chatId: String, c: ToolCall, mk: ((String) -> Unit) -> ToolCtx) {
-        status.value = Tools.label(c.name)
+    private suspend fun execTool(chatId: String, c: ToolCall, mk: ((String) -> Unit) -> ToolCtx, step: Int = 0) {
+        status.value = Tools.label(c.name) + if (step > 0) " (step $step of $MAX_STEPS)" else ""
         val msgId = Ids.id()
         val placeholder = MessageEntity(msgId, chatId, "tool", "", Ids.now(), toolCallId = c.id, toolName = c.name, toolArgs = c.args)
         dao.upsertMessage(placeholder)
@@ -274,8 +275,15 @@ class AgentRunner(private val app: App) {
             throw e
         }
         val bad = result.startsWith("ERROR") || result.startsWith("DENIED") || result.startsWith("VERIFY FAIL")
-        dao.upsertMessage(placeholder.copy(content = result.ifBlank { "(no output)" }, isError = bad))
+        val state = mk {}.state
+        // the same call giving the same result again and again means no progress
+        val repeats = state.sameResult.merge(sig + "#" + result.hashCode(), 1, Int::plus)!!
+        state.errorStreak = if (result.startsWith("ERROR")) state.errorStreak + 1 else 0
+        val shown = if (repeats >= 3) result + "\n\nLOOP_DETECTED: this exact call returned this exact result $repeats times. Stop repeating it: change the approach or tell the user what blocks you." else result
+        dao.upsertMessage(placeholder.copy(content = shown.ifBlank { "(no output)" }, isError = bad))
         live.update { it - msgId }
+        if (repeats >= 5) throw LlmError("Aura stopped: the agent kept getting the same result from ${Tools.label(c.name)} without progress. Send a message with more guidance.")
+        if (state.errorStreak >= 6) throw LlmError("Aura stopped: 6 steps in a row failed. Last error: ${result.take(200)}")
     }
 
     private suspend fun generateWithRetry(chatId: String, onId: (String) -> Unit): List<ToolCall> {
@@ -330,11 +338,16 @@ class AgentRunner(private val app: App) {
         active.sumOf { it.content.length + (it.toolCalls?.length ?: 0) } + SYSTEM.length + 3000
 
     /** When the history reaches ~75% of the context window, older turns are folded into one summary message. */
+    private val lastCompact = ConcurrentHashMap<String, Long>()
+
     suspend fun maybeCompact(chatId: String, force: Boolean) {
         if (store.current() == null && !(store.autoMode.value && store.candidates().isNotEmpty())) return
         val active = dao.messagesOnce(chatId).filter { !it.compacted }
         val limit = store.contextTokens.value
         if (!force && Tokens.estimate(contextChars(active)) < limit * 0.75) return
+        // never compact over and over: one summary request is enough per couple of minutes unless the model says the prompt is too long
+        if (!force && System.currentTimeMillis() - (lastCompact[chatId] ?: 0L) < 120_000L) return
+        lastCompact[chatId] = System.currentTimeMillis()
         val cut = Compact.cut(active.map { it.role }, if (force) 4 else 8)
         if (cut <= 0) return
         val old = active.subList(0, cut)
@@ -458,7 +471,7 @@ You have GitHub tools that act with the user's token. When the user wants an app
 1. Plan briefly, then create the repository with github_create_repo.
 2. Push the complete source with github_write_files, many files per commit. Never leave placeholders.
 3. For Android apps add .github/workflows/build.yml that builds an APK: checkout, actions/setup-java (temurin 17), gradle/actions/setup-gradle with an explicit gradle-version, run gradle assembleDebug (or assembleRelease with a committed keystore), upload the APK with actions/upload-artifact, and publish it with softprops/action-gh-release (permissions: contents: write). Do not rely on a gradle wrapper jar.
-4. Start it with github_run_workflow (or it runs on push), then github_wait_run. If it fails, read github_run_logs, fix the code, push again and retry until it succeeds.
+4. Start it with github_run_workflow (or it runs on push), then github_wait_run. If it fails, read github_run_logs, fix the code with edit_file_diff, push and run it again. Try at most 5 times; after that stop and tell the user exactly what still fails.
 5. Finish by giving the user the repository URL and the APK download link from github_latest_release.
 Cloud and browser: for heavy tasks (builds, tests, installs, long scripts) use cloud_exec, which runs in the user's own GitHub Codespace; fetch results with cloud_download. For anything that needs a real browser (open live sites, scrape, fill forms, test a UI, verify a deployed app) use agent_browser (CLI, good default) or playwright_tools and playwright_call (Playwright MCP). Both run headless in the codespace. The codespace is stopped automatically when your task ends, so do not try to stop it. If a cloud tool returns NO_CODESPACE_TOKEN, politely tell the user to add their GitHub Codespace token in Settings first.
 Working rules: never rewrite an existing file. Find code with search_code and find_files, read only the lines you need with read_lines, then change it with edit_file_diff (GitHub repo) or cloud_edit_file (codespace) using the exact existing text. If a tool reports a mismatch, read the lines again and retry. Never write placeholders such as "// ... rest of code". After every code change run verify_project and fix the errors it reports until it prints VERIFY PASS (at most 5 attempts). For large investigations hand focused questions to delegate so your own context stays small. Dangerous commands ask the user for approval; if you get DENIED do not retry it. Every turn is checkpointed, so the user can undo it.

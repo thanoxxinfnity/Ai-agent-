@@ -202,6 +202,7 @@ object Tools {
                     (t["tree"] as JsonArray).filter { it.s("type") == "blob" }.map { it.s("path") }.take(400).joinToString("\n")
                 }
                 "github_run_workflow" -> {
+                    if (ctx.state.ciFailures >= ToolsPro.MAX_VERIFY) return "MAX_RETRIES_REACHED: the build already failed ${ToolsPro.MAX_VERIFY} times in this task. Do not start it again; explain the remaining error to the user."
                     val repo = full(a.s("repo")!!)
                     val ref = a.s("ref") ?: gh.call("GET", "/repos/$repo").s("default_branch")!!
                     gh.call("POST", "/repos/$repo/actions/workflows/${a.s("workflow")}/dispatches", buildJsonObject { put("ref", ref) })
@@ -354,7 +355,16 @@ object Tools {
         repeat(36) {
             val r = gh.call("GET", "/repos/$repo/actions/runs/$id").o()
             ctx.emit("run $id: ${r.s("status")} ${r.s("conclusion").orEmpty()}\n")
-            if (r.s("status") == "completed") return "Run $id finished: ${r.s("conclusion")} ${r.s("html_url")}"
+            if (r.s("status") == "completed") {
+                val conclusion = r.s("conclusion")
+                if (conclusion == "failure" || conclusion == "timed_out") {
+                    ctx.state.ciFailures++
+                    val n = ctx.state.ciFailures
+                    return "Run $id finished: $conclusion ${r.s("html_url")}\nBuild failure $n of ${ToolsPro.MAX_VERIFY}." +
+                        if (n >= ToolsPro.MAX_VERIFY) "\nMAX_RETRIES_REACHED: stop fixing and tell the user what is still failing." else " Read the logs with github_run_logs and fix the cause."
+                }
+                return "Run $id finished: $conclusion ${r.s("html_url")}"
+            }
             delay(10_000)
         }
         return "Run $id is still running after 6 minutes. Call github_wait_run again."
