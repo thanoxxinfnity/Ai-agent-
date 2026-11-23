@@ -192,6 +192,8 @@ fun ChatHost(vm: MainVM) {
                     input = input.substring(0, mention.range.last + 1 - mention.groupValues[1].length) + sk.name + " "
                 }
             }
+            val voiceErr by vm.voice.error.collectAsState()
+            if (voiceErr.isNotBlank()) Text(voiceErr, color = A.danger, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 20.dp).clickable { vm.voice.error.value = "" })
             if (attachMsg.isNotBlank()) Text(attachMsg, color = A.danger, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 20.dp).clickable { vm.attachMsg.value = "" })
             Composer(
                 value = input, onValue = { input = it }, running = running, modelLabel = modelLabel,
@@ -217,6 +219,7 @@ fun ChatHost(vm: MainVM) {
 @Composable
 private fun MessageList(messages: List<MessageEntity>, vm: MainVM) {
     val liveState = vm.runner.live.collectAsState()
+    val voiceState = vm.voice.state.collectAsState()
     val running by vm.running.collectAsState()
     val status by vm.runner.status.collectAsState()
     val reversed = remember(messages) { messages.asReversed() }
@@ -240,7 +243,7 @@ private fun MessageList(messages: List<MessageEntity>, vm: MainVM) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (running) item(key = "thinking") { Thinking(status) }
-        items(reversed, key = { it.id }) { m -> MessageItem(m, liveState, restoreFor[m.id]?.let { t -> cps[t] ?: 0 }, { restoreFor[m.id]?.let { t -> confirmTurn = t } }) }
+        items(reversed, key = { it.id }) { m -> MessageItem(m, liveState, restoreFor[m.id]?.let { t -> cps[t] ?: 0 }, { restoreFor[m.id]?.let { t -> confirmTurn = t } }, voiceState) { vm.voice.speak(m.id, m.content) } }
     }
     confirmTurn?.let { t ->
         AlertDialog(
@@ -254,14 +257,14 @@ private fun MessageList(messages: List<MessageEntity>, vm: MainVM) {
 }
 
 @Composable
-private fun MessageItem(m: MessageEntity, live: State<Map<String, String>>, restoreCount: Int?, onRestore: () -> Unit) {
+private fun MessageItem(m: MessageEntity, live: State<Map<String, String>>, restoreCount: Int?, onRestore: () -> Unit, voice: State<com.aura.agent.agent.VoiceState>, onSpeak: () -> Unit) {
     when (m.role) {
         "user" -> UserBubble(m.content, remember(m.attachments) { Attachments.parse(m.attachments) })
         "assistant" -> {
             val streaming = live.value[m.id]
             val text = streaming ?: m.content
             if (text.isBlank()) return
-            if (m.isError) ErrorRow(text) else AssistantText(text, showActions = streaming == null, restoreCount = restoreCount, onRestore = onRestore)
+            if (m.isError) ErrorRow(text) else AssistantText(text, showActions = streaming == null, restoreCount = restoreCount, onRestore = onRestore, msgId = m.id, voice = voice, onSpeak = onSpeak)
         }
         "note" -> {}
         "switch" -> Text(m.content, color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp))
@@ -321,12 +324,16 @@ private fun UserBubble(text: String, attachments: List<Attachment>) {
 }
 
 @Composable
-private fun AssistantText(text: String, showActions: Boolean, restoreCount: Int? = null, onRestore: () -> Unit = {}) {
+private fun AssistantText(text: String, showActions: Boolean, restoreCount: Int? = null, onRestore: () -> Unit = {}, msgId: String = "", voice: State<com.aura.agent.agent.VoiceState>? = null, onSpeak: () -> Unit = {}) {
     val clip = LocalClipboardManager.current
     Column(Modifier.fillMaxWidth()) {
         SelectionContainer { Markdown(text) }
         if (showActions) Row(Modifier.padding(top = 4.dp).offset(x = (-8).dp), verticalAlignment = Alignment.CenterVertically) {
             IconBtn(R.drawable.ic_copy, { clip.setText(AnnotatedString(text)) }, tint = A.dim, size = 36.dp)
+            val vs = voice?.value
+            val mine = vs != null && vs.id == msgId
+            if (mine && vs!!.loading) Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(16.dp), color = A.accent, strokeWidth = 2.dp) }
+            else IconBtn(if (mine) R.drawable.ic_stop else R.drawable.ic_speaker, onSpeak, tint = if (mine) A.accent else A.dim, size = 36.dp, modifier = Modifier.testTag("speak"))
             if (restoreCount != null) {
                 Spacer(Modifier.width(4.dp))
                 Row(

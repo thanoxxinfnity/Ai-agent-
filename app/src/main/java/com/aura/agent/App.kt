@@ -27,6 +27,8 @@ class App : Application() {
     lateinit var store: Store
     lateinit var runner: AgentRunner
     lateinit var supabase: Supabase
+    lateinit var voice: com.aura.agent.agent.Voice
+    var geminiBase = com.aura.agent.net.GeminiTts.BASE
     @Volatile var foreground = false
 
     override fun onCreate() {
@@ -44,6 +46,7 @@ class App : Application() {
         store = Store(this)
         supabase = Supabase(store)
         runner = AgentRunner(this)
+        voice = com.aura.agent.agent.VoiceEngine(this, store, base = { geminiBase })
         appScope.launch { supabase.loadConfig() }
         appScope.launch { CloudSession.recover(store, ::codespacePat) }
         val nm = getSystemService(NotificationManager::class.java)

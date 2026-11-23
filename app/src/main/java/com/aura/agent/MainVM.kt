@@ -26,6 +26,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     private val a = app as App
     val store = a.store
     val runner = a.runner
+    val voice get() = a.voice
     private val dao = a.db.dao()
 
     val route = MutableStateFlow<Route>(Route.Chat)

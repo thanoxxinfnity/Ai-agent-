@@ -192,6 +192,49 @@ fun CodespaceToken(vm: MainVM) {
 }
 
 @Composable
+fun VoiceSection(vm: MainVM) {
+    val own by vm.store.voiceKeyOwn.collectAsState()
+    val selected by vm.store.voiceNameFlow.collectAsState()
+    val providers by vm.store.providers.collectAsState()
+    val state by vm.voice.state.collectAsState()
+    val err by vm.voice.error.collectAsState()
+    val female = com.aura.agent.net.GeminiTts.VOICES.firstOrNull { it.name == selected }?.female ?: true
+    val usesProviderKey = own.isBlank() && vm.store.voiceKey().isNotBlank()
+    val sample = "Namaste, main Aura hoon. Aap kaise hain?"
+    Text(
+        "Add your own Gemini API key to hear answers in a natural voice. The key stays on this device. Without a key, Aura reads with your phone's voice.",
+        color = A.dim, fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(bottom = 12.dp),
+    )
+    Field("Gemini API key for voice", own, { vm.store.setVoiceKey(it) }, placeholder = "paste your key", secret = true, mono = true, tag = "voice-key")
+    if (usesProviderKey) Text("Using the key of your Gemini provider.", color = A.dim, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp, start = 2.dp))
+    Spacer(Modifier.height(14.dp))
+    Segmented(listOf("f" to "Female", "m" to "Male"), if (female) "f" else "m") { g ->
+        val wantFemale = g == "f"
+        if (wantFemale != female) vm.store.setVoiceName(if (wantFemale) com.aura.agent.net.GeminiTts.DEFAULT_FEMALE else com.aura.agent.net.GeminiTts.DEFAULT_MALE)
+    }
+    Spacer(Modifier.height(10.dp))
+    com.aura.agent.net.GeminiTts.VOICES.filter { it.female == female }.forEach { v ->
+        val sel = v.name == selected
+        val playing = state.id == "voice-preview-" + v.name
+        Row(
+            Modifier.fillMaxWidth().padding(bottom = 6.dp).clip(RoundedCornerShape(12.dp)).background(if (sel) A.bubble else Color.Transparent)
+                .clickable { vm.store.setVoiceName(v.name); vm.voice.speak("voice-preview-" + v.name, sample) }.padding(start = 14.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(v.name, color = A.text, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Text(v.style, color = A.dim, fontSize = 12.sp)
+            }
+            if (sel) AIcon(R.drawable.ic_check, tint = A.accent, size = 18.dp)
+            if (playing && state.loading) CircularProgressIndicator(Modifier.padding(10.dp).size(18.dp), color = A.accent, strokeWidth = 2.dp)
+            else IconBtn(if (playing) R.drawable.ic_stop else R.drawable.ic_speaker, { vm.store.setVoiceName(v.name); vm.voice.speak("voice-preview-" + v.name, sample) }, tint = A.accent, size = 40.dp)
+        }
+    }
+    if (err.isNotBlank()) Text(err, color = A.danger, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 6.dp))
+    Text("Tap a voice to hear it and select it.", color = A.dim, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp, start = 2.dp))
+}
+
+@Composable
 fun GithubButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
     Row(
         modifier.fillMaxWidth().clip(CircleShape).background(A.text).clickable(onClick = onClick).padding(horizontal = 22.dp, vertical = 15.dp),
@@ -316,6 +359,7 @@ fun SettingsScreen(vm: MainVM) {
             }
             item { Section("GitHub") { GithubSignIn(vm) } }
             item { Section("GitHub Codespace Token (PAT)") { CodespaceToken(vm) } }
+            item { Section("Voice (read aloud)") { VoiceSection(vm) } }
             item {
                 val guard by vm.store.guardrails.collectAsState()
                 val ctxTokens by vm.store.contextTokens.collectAsState()

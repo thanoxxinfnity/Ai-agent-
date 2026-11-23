@@ -80,6 +80,20 @@ class Store(ctx: Context) {
     val contextTokens = _contextTokens.asStateFlow()
     fun setContextTokens(v: Int) { _contextTokens.value = v; prefs.edit().putInt("contextTokens", v).apply() }
 
+    // ---- read aloud (Gemini voice): the user's own key, kept only on this device
+    private val _voiceKey = MutableStateFlow(s("voiceKey"))
+    val voiceKeyOwn = _voiceKey.asStateFlow()
+    fun setVoiceKey(k: String) { _voiceKey.value = k.trim(); prefs.edit().putString("voiceKey", k.trim()).apply() }
+    private val _voiceName = MutableStateFlow(s("voiceName", "Kore"))
+    val voiceNameFlow = _voiceName.asStateFlow()
+    fun voiceName(): String = _voiceName.value.ifBlank { "Kore" }
+    fun setVoiceName(n: String) { _voiceName.value = n; prefs.edit().putString("voiceName", n).apply() }
+
+    /** The voice key, or the key of the user's own Gemini provider when no separate one was entered. */
+    fun voiceKey(): String = _voiceKey.value.ifBlank {
+        _providers.value.firstOrNull { "generativelanguage.googleapis.com" in it.baseUrl && it.apiKey.isNotBlank() }?.apiKey.orEmpty()
+    }
+
     private val _theme = MutableStateFlow(s("theme", "system"))
     val theme = _theme.asStateFlow()
     private val _supaUrl = MutableStateFlow(s("supaUrl", BuildConfig.SUPABASE_URL))
