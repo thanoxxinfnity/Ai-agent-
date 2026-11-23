@@ -26,7 +26,7 @@ object Tools {
         putJsonArray("required") { add("path"); add("content") }
     }
 
-    val defs: List<ToolDef> by lazy { (baseDefs + ToolsPro.defs).map(::relaxRepo) }
+    val defs: List<ToolDef> by lazy { (baseDefs + ToolsPro.defs + ToolsVercel.defs).map(::relaxRepo) }
 
     /** `repo` stops being required: it defaults to the repository chosen when the chat started. */
     private fun relaxRepo(t: ToolDef): ToolDef {
@@ -165,6 +165,7 @@ object Tools {
         }
         if (ctx.readOnly && name !in ToolsPro.READ_ONLY) return "ERROR: workers are read-only and cannot use $name."
         if (name in ToolsPro.NAMES) return ToolsPro.run(ctx, name, a)
+        if (name in ToolsVercel.NAMES) return ToolsVercel.run(ctx, name, a)
         if (name in CLOUD_TOOLS) return runCloud(name, a, ctx)
         val token = store.githubToken.value
         if (token.isBlank()) return "ERROR: No GitHub token. Ask the user to add one in Settings > GitHub."
@@ -202,7 +203,7 @@ object Tools {
                     (t["tree"] as JsonArray).filter { it.s("type") == "blob" }.map { it.s("path") }.take(400).joinToString("\n")
                 }
                 "github_run_workflow" -> {
-                    if (ctx.state.ciFailures >= ToolsPro.MAX_VERIFY) return "MAX_RETRIES_REACHED: the build already failed ${ToolsPro.MAX_VERIFY} times in this task. Do not start it again; explain the remaining error to the user."
+                    if (ctx.state.ciFailures >= ctx.mode.verify) return "MAX_RETRIES_REACHED: the build already failed ${ctx.mode.verify} times in this task. Do not start it again; explain the remaining error to the user."
                     val repo = full(a.s("repo")!!)
                     val ref = a.s("ref") ?: gh.call("GET", "/repos/$repo").s("default_branch")!!
                     gh.call("POST", "/repos/$repo/actions/workflows/${a.s("workflow")}/dispatches", buildJsonObject { put("ref", ref) })
@@ -360,8 +361,8 @@ object Tools {
                 if (conclusion == "failure" || conclusion == "timed_out") {
                     ctx.state.ciFailures++
                     val n = ctx.state.ciFailures
-                    return "Run $id finished: $conclusion ${r.s("html_url")}\nBuild failure $n of ${ToolsPro.MAX_VERIFY}." +
-                        if (n >= ToolsPro.MAX_VERIFY) "\nMAX_RETRIES_REACHED: stop fixing and tell the user what is still failing." else " Read the logs with github_run_logs and fix the cause."
+                    return "Run $id finished: $conclusion ${r.s("html_url")}\nBuild failure $n of ${ctx.mode.verify}." +
+                        if (n >= ctx.mode.verify) "\nMAX_RETRIES_REACHED: stop fixing and tell the user what is still failing." else " Read the logs with github_run_logs and fix the cause."
                 }
                 return "Run $id finished: $conclusion ${r.s("html_url")}"
             }
@@ -395,6 +396,7 @@ object Tools {
         "agent_browser" -> "Browsing with agent-browser"
         "playwright_tools" -> "Listing browser tools"
         "playwright_call" -> "Browsing with Playwright"
+        "vercel_deploy" -> "Deploying to Vercel"
         "edit_file_diff" -> "Editing file"
         "cloud_edit_file" -> "Editing file in codespace"
         "verify_project" -> "Building and checking"

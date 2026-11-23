@@ -26,6 +26,8 @@ data class Provider(
     val defaultModel: String = "",
     /** requests per minute this provider allows; 0 = Aura's built-in default for known hosts */
     val rpm: Int = 0,
+    /** "auto" sends the reasoning level only to hosts known to accept it; "on" always; "off" never */
+    val reasoning: String = "auto",
 )
 
 val AppJson = Json { ignoreUnknownKeys = true; encodeDefaults = true; isLenient = true }
@@ -92,6 +94,21 @@ class Store(ctx: Context) {
     /** The voice key, or the key of the user's own Gemini provider when no separate one was entered. */
     fun voiceKey(): String = _voiceKey.value.ifBlank {
         _providers.value.firstOrNull { "generativelanguage.googleapis.com" in it.baseUrl && it.apiKey.isNotBlank() }?.apiKey.orEmpty()
+    }
+
+    private val _thinkMode = MutableStateFlow(com.aura.agent.agent.ThinkMode.fromId(s("thinkMode")))
+    val thinkMode = _thinkMode.asStateFlow()
+    fun setThinkMode(m: com.aura.agent.agent.ThinkMode) { _thinkMode.value = m; prefs.edit().putString("thinkMode", m.id).apply() }
+
+    private val _vercelToken = MutableStateFlow(s("vercelToken"))
+    val vercelToken = _vercelToken.asStateFlow()
+    private val _vercelUser = MutableStateFlow(s("vercelUser"))
+    val vercelUser = _vercelUser.asStateFlow()
+    private val _vercelTeam = MutableStateFlow(s("vercelTeam"))
+    val vercelTeam = _vercelTeam.asStateFlow()
+    fun setVercel(token: String, user: String, team: String) {
+        _vercelToken.value = token; _vercelUser.value = user; _vercelTeam.value = team
+        prefs.edit().putString("vercelToken", token).putString("vercelUser", user).putString("vercelTeam", team).apply()
     }
 
     private val _theme = MutableStateFlow(s("theme", "system"))

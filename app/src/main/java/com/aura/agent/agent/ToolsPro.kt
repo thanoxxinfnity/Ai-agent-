@@ -6,7 +6,6 @@ import java.util.Base64
 
 /** Editing, verification, search and delegation tools. */
 object ToolsPro {
-    const val MAX_VERIFY = 5
     const val WORKSPACE = "/workspaces/aura-workspace"
 
     private fun prop(type: String, desc: String) = buildJsonObject { put("type", type); put("description", desc) }
@@ -37,7 +36,7 @@ object ToolsPro {
         ),
         ToolDef(
             "verify_project",
-            "Build, typecheck or lint the project in the codespace (npm build / tsc --noEmit / lint, python py_compile, gradle assembleDebug, cargo check, go build). Run it after every code change. On FAIL read the errors, fix them with the edit tools and run it again until it prints PASS (at most 5 attempts).",
+            "Build, typecheck or lint the project in the codespace (npm build / tsc --noEmit / lint, python py_compile, gradle assembleDebug, cargo check, go build). Run it after every code change. On FAIL read the errors, fix them with the edit tools and run it again until it prints PASS. The tool tells you when the attempt limit is reached.",
             schema(
                 emptyList(), "dir" to prop("string", "Project directory in the codespace, default $WORKSPACE"),
                 "commands" to buildJsonObject { put("type", "array"); putJsonObject("items") { put("type", "string") }; put("description", "Optional custom commands instead of auto-detection") },
@@ -219,8 +218,9 @@ object ToolsPro {
     private suspend fun verify(ctx: ToolCtx, a: JsonObject): String {
         val c = ctx.cloud.client()
         val cmds = (a["commands"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
-        if (ctx.state.verifyFailures >= MAX_VERIFY) {
-            return "MAX_RETRIES_REACHED: verification already failed $MAX_VERIFY times. Stop retrying; explain the remaining error to the user and ask how to proceed."
+        val limit = ctx.mode.verify
+        if (ctx.state.verifyFailures >= limit) {
+            return "MAX_RETRIES_REACHED: verification already failed $limit times. Stop retrying; explain the remaining error to the user and ask how to proceed (a deeper thinking mode allows more attempts)."
         }
         ctx.emit("$ verify_project\n")
         val r = c.execStream(VerifyScript.SCRIPT, 1500, null, mapOf("DIR" to (a.s("dir") ?: ctx.workDir(c)), "CMDS" to cmds.joinToString("\n")), ctx.emit)
@@ -231,8 +231,8 @@ object ToolsPro {
             else -> {
                 ctx.state.verifyFailures++
                 val n = ctx.state.verifyFailures
-                "VERIFY FAIL (attempt $n of $MAX_VERIFY)\n" + out.takeLast(5000) +
-                    (if (n >= MAX_VERIFY) "\nMAX_RETRIES_REACHED: stop and report the remaining error to the user." else "\nRead the errors above, fix them with edit_file_diff or cloud_edit_file, then call verify_project again.")
+                "VERIFY FAIL (attempt $n of $limit)\n" + out.takeLast(5000) +
+                    (if (n >= limit) "\nMAX_RETRIES_REACHED: stop and report the remaining error to the user." else "\nRead the errors above, fix them with edit_file_diff or cloud_edit_file, then call verify_project again.")
             }
         }
     }

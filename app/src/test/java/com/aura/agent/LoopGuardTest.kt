@@ -68,10 +68,11 @@ class LoopGuardTest {
 
     @Test fun six_failures_in_a_row_stop_the_run() {
         val m = Mock().start(); val app = setup(m)
-        repeat(9) { i -> m.script += m.tool("github_read_file", "{\"repo\":\"r\",\"path\":\"missing$i.txt\"}") }
+        val limit = ThinkMode.STEADY.streak
+        repeat(limit + 3) { i -> m.script += m.tool("github_read_file", "{\"repo\":\"r\",\"path\":\"missing$i.txt\"}") }
         val r = run(app)
-        assertEquals(6, tools(r).size)
-        assertTrue(r.last().content, r.last().isError && r.last().content.contains("6 steps in a row failed"))
+        assertEquals(limit, tools(r).size)
+        assertTrue(r.last().content, r.last().isError && r.last().content.contains("$limit steps in a row failed"))
     }
 
     @Test fun a_success_resets_the_failure_streak() {
@@ -85,17 +86,18 @@ class LoopGuardTest {
         assertEquals("gave up politely", r.last { it.role == "assistant" }.content)
     }
 
-    @Test fun build_fix_attempts_are_capped_at_five() {
+    @Test fun build_fix_attempts_are_capped_by_the_thinking_mode() {
         val m = Mock().start(); val app = setup(m)
-        for (id in 1..5) m.script += m.tool("github_wait_run", "{\"repo\":\"r\",\"run_id\":$id}")
+        val limit = ThinkMode.STEADY.verify
+        for (id in 1..limit) m.script += m.tool("github_wait_run", "{\"repo\":\"r\",\"run_id\":$id}")
         m.script += m.tool("github_run_workflow", "{\"repo\":\"r\",\"workflow\":\"build.yml\"}")
         m.script += m.text("the build still fails, here is why")
         val r = run(app)
         val t = tools(r)
-        assertTrue(t[0].content, t[0].content.contains("Build failure 1 of 5"))
-        assertTrue(t[4].content, t[4].content.contains("Build failure 5 of 5") && t[4].content.contains("MAX_RETRIES_REACHED"))
-        assertTrue(t[5].content, t[5].content.startsWith("MAX_RETRIES_REACHED"))
-        assertEquals("the workflow was not started a 6th time", 0, m.bodies.count { it.first.contains("/dispatches") })
+        assertTrue(t[0].content, t[0].content.contains("Build failure 1 of $limit"))
+        assertTrue(t[limit - 1].content, t[limit - 1].content.contains("Build failure $limit of $limit") && t[limit - 1].content.contains("MAX_RETRIES_REACHED"))
+        assertTrue(t[limit].content, t[limit].content.startsWith("MAX_RETRIES_REACHED"))
+        assertEquals("the workflow was not started again", 0, m.bodies.count { it.first.contains("/dispatches") })
     }
 
     @Test fun context_compaction_runs_once_not_at_every_step() {

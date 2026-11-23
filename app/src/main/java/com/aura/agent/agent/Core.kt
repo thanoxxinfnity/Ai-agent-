@@ -213,3 +213,85 @@ object Compact {
     fun fallbackSummary(lines: List<String>): String =
         "Earlier conversation (automatic extract):\n" + lines.joinToString("\n") { it.take(240) }.takeLast(6000)
 }
+
+/** Minimal reader for the .tar.gz that GitHub serves for a repository. */
+object TarReader {
+    class Entry(val path: String, val bytes: ByteArray)
+
+    fun readGz(gz: ByteArray, stripFirst: Boolean = true, maxFileBytes: Int = 5 * 1024 * 1024): List<Entry> =
+        read(java.util.zip.GZIPInputStream(gz.inputStream()), stripFirst, maxFileBytes)
+
+    fun read(input: java.io.InputStream, stripFirst: Boolean = true, maxFileBytes: Int = 5 * 1024 * 1024): List<Entry> {
+        val out = ArrayList<Entry>()
+        val header = ByteArray(512)
+        var longName: String? = null
+        while (true) {
+            if (!readFully(input, header)) break
+            if (header.all { it.toInt() == 0 }) break
+            var name = str(header, 0, 100)
+            val prefix = str(header, 345, 155)
+            if (prefix.isNotEmpty()) name = "$prefix/$name"
+            val size = str(header, 124, 12).trim().ifEmpty { "0" }.toLong(8)
+            val type = header[156].toInt().toChar()
+            val padded = (size + 511) / 512 * 512
+            if (type == 'x' || type == 'g') {          // pax headers carry long paths
+                val data = ByteArray(size.toInt()); readFully(input, data); skip(input, padded - size)
+                Regex("\\d+ path=([^\\n]*)\\n").find(String(data))?.let { longName = it.groupValues[1] }
+                continue
+            }
+            if (type == 'L') {                          // GNU long name
+                val data = ByteArray(size.toInt()); readFully(input, data); skip(input, padded - size)
+                longName = String(data).trimEnd('\u0000'); continue
+            }
+            if (longName != null) { name = longName!!; longName = null }
+            if ((type == '0' || type == '\u0000') && !name.endsWith("/")) {
+                if (size > maxFileBytes) { skip(input, padded) } else {
+                    val data = ByteArray(size.toInt()); readFully(input, data); skip(input, padded - size)
+                    val path = if (stripFirst) name.substringAfter('/', "") else name
+                    if (path.isNotEmpty()) out += Entry(path, data)
+                }
+            } else skip(input, padded)
+        }
+        return out
+    }
+
+    private fun str(b: ByteArray, off: Int, len: Int): String {
+        var end = off
+        while (end < off + len && b[end].toInt() != 0) end++
+        return String(b, off, end - off)
+    }
+
+    private fun readFully(i: java.io.InputStream, b: ByteArray): Boolean {
+        var n = 0
+        while (n < b.size) { val r = i.read(b, n, b.size - n); if (r < 0) return n > 0 && false; n += r }
+        return true
+    }
+
+    private fun skip(i: java.io.InputStream, n: Long) { var left = n; val buf = ByteArray(8192); while (left > 0) { val r = i.read(buf, 0, minOf(left, buf.size.toLong()).toInt()); if (r < 0) return; left -= r } }
+}
+
+object DeployFilter {
+    private val skipDirs = listOf(".git/", "node_modules/", ".github/", ".vercel/", ".next/cache/", "__pycache__/", ".gradle/", "build/")
+    private val skipNames = setOf(".DS_Store", "Thumbs.db", ".env", ".env.local")
+
+    /** Which files of a project go to Vercel: no VCS data, dependencies, caches or secrets. */
+    fun keep(path: String, directory: String = ""): Boolean {
+        val dir = directory.trim('/').let { if (it.isEmpty()) "" else "$it/" }
+        if (dir.isNotEmpty() && !path.startsWith(dir)) return false
+        val rel = path.removePrefix(dir)
+        if (rel.isEmpty()) return false
+        if (skipDirs.any { rel.startsWith(it) || rel.contains("/$it") }) return false
+        if (rel.substringAfterLast('/') in skipNames) return false
+        return true
+    }
+
+    fun relative(path: String, directory: String = ""): String {
+        val dir = directory.trim('/').let { if (it.isEmpty()) "" else "$it/" }
+        return path.removePrefix(dir)
+    }
+
+    fun projectName(raw: String): String {
+        val n = raw.lowercase().replace(Regex("[^a-z0-9._-]+"), "-").replace(Regex("-{2,}"), "-").trim('-', '.', '_').take(52)
+        return n.ifBlank { "aura-site" }
+    }
+}

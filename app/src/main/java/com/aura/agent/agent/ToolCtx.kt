@@ -16,6 +16,7 @@ class RunState {
     val sameResult = java.util.concurrent.ConcurrentHashMap<String, Int>()
     @Volatile var errorStreak = 0
     @Volatile var ciFailures = 0
+    @Volatile var deployFailures = 0
     val snapshotted = java.util.Collections.synchronizedSet(HashSet<String>())
 
     fun markModified() { modified = true; verified = false }
@@ -39,6 +40,7 @@ class ToolCtx(
     val subAgents: (suspend (List<String>) -> String)? = null,
     /** owner/name chosen when the chat started; tools use it when no repo is given */
     val activeRepo: String = "",
+    val mode: ThinkMode = ThinkMode.STEADY,
 ) {
     val store: Store get() = app.store
 

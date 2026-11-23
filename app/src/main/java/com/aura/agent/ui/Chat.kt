@@ -131,6 +131,7 @@ fun ChatHost(vm: MainVM) {
     val pickFiles = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetMultipleContents()) { vm.attach(it) }
     val chat = chats.firstOrNull { it.id == currentId }
     val auto by vm.store.autoMode.collectAsState()
+    val thinkMode by vm.store.thinkMode.collectAsState()
     // keyed on the store values so the chip updates as soon as a provider or model changes
     val current = remember(providers, activeProvider, activeModel) { vm.store.current() }
     val hasModel = remember(providers, activeProvider, activeModel, auto) { current != null || (auto && vm.store.candidates().isNotEmpty()) }
@@ -199,6 +200,7 @@ fun ChatHost(vm: MainVM) {
                 value = input, onValue = { input = it }, running = running, modelLabel = modelLabel,
                 attachments = pending, onRemoveAttachment = vm::removePending,
                 onPickImages = { pickImages.launch("image/*") }, onPickFiles = { pickFiles.launch("*/*") },
+                mode = thinkMode, onMode = { vm.store.setThinkMode(it) },
                 onModel = { picker = true },
                 onSend = { vm.send(input); input = "" }, onStop = vm::stop,
             )
@@ -224,6 +226,11 @@ private fun MessageList(messages: List<MessageEntity>, vm: MainVM) {
     val status by vm.runner.status.collectAsState()
     val reversed = remember(messages) { messages.asReversed() }
     val state = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val atBottom by remember { derivedStateOf { state.firstVisibleItemIndex == 0 && state.firstVisibleItemScrollOffset < 120 } }
+    // sending a message brings the list back to the newest message, then the user can scroll freely again
+    val lastUserId = messages.lastOrNull { it.role == "user" }?.id
+    LaunchedEffect(lastUserId) { if (lastUserId != null) state.animateScrollToItem(0) }
     val cps by vm.checkpointTurns.collectAsState()
     var confirmTurn by remember { mutableStateOf<String?>(null) }
     // the final answer of each turn that changed something gets a "Restore checkpoint" button
@@ -237,13 +244,25 @@ private fun MessageList(messages: List<MessageEntity>, vm: MainVM) {
         }
         map
     }
+    Box(Modifier.fillMaxSize()) {
     LazyColumn(
-        state = state, reverseLayout = true, modifier = Modifier.fillMaxSize(),
+        state = state, reverseLayout = true, modifier = Modifier.fillMaxSize().testTag("messages"),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (running) item(key = "thinking") { Thinking(status) }
         items(reversed, key = { it.id }) { m -> MessageItem(m, liveState, restoreFor[m.id]?.let { t -> cps[t] ?: 0 }, { restoreFor[m.id]?.let { t -> confirmTurn = t } }, voiceState) { vm.voice.speak(m.id, m.content) } }
+    }
+    AnimatedVisibility(
+        visible = !atBottom, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
+        enter = fadeIn(tween(150)) + scaleIn(tween(150)), exit = fadeOut(tween(120)) + scaleOut(tween(120)),
+    ) {
+        Box(
+            Modifier.size(42.dp).testTag("scroll-down").clip(CircleShape).background(A.surface).border(1.dp, A.border, CircleShape)
+                .clickable { scope.launch { state.animateScrollToItem(0) } },
+            contentAlignment = Alignment.Center,
+        ) { AIcon(R.drawable.ic_chevron_down, tint = A.text, size = 20.dp) }
+    }
     }
     confirmTurn?.let { t ->
         AlertDialog(
@@ -470,8 +489,10 @@ private fun EmptyState(hasModel: Boolean, onSuggest: (String) -> Unit, onSetup: 
 private fun Composer(
     value: String, onValue: (String) -> Unit, running: Boolean, modelLabel: String,
     attachments: List<Attachment>, onRemoveAttachment: (Attachment) -> Unit, onPickImages: () -> Unit, onPickFiles: () -> Unit,
+    mode: com.aura.agent.agent.ThinkMode, onMode: (com.aura.agent.agent.ThinkMode) -> Unit,
     onModel: () -> Unit, onSend: () -> Unit, onStop: () -> Unit,
 ) {
+    var modeMenu by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(26.dp)
     var plusMenu by remember { mutableStateOf(false) }
     Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
@@ -508,9 +529,35 @@ private fun Composer(
                 ) {
                     AIcon(R.drawable.ic_chip, tint = A.dim, size = 16.dp)
                     Spacer(Modifier.width(6.dp))
-                    Text(modelLabel, color = A.dim, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 150.dp))
+                    Text(modelLabel, color = A.dim, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 96.dp))
                     Spacer(Modifier.width(2.dp))
                     AIcon(R.drawable.ic_chevron_down, tint = A.dim, size = 14.dp)
+                }
+                Spacer(Modifier.width(6.dp))
+                Box {
+                    Row(
+                        Modifier.testTag("mode-chip").clip(CircleShape).border(1.dp, if (mode == com.aura.agent.agent.ThinkMode.STEADY) A.border else A.accent, CircleShape)
+                            .clickable { modeMenu = true }.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AIcon(R.drawable.ic_brain, tint = if (mode == com.aura.agent.agent.ThinkMode.STEADY) A.dim else A.accent, size = 16.dp)
+                        Spacer(Modifier.width(5.dp))
+                        Text(mode.label, color = if (mode == com.aura.agent.agent.ThinkMode.STEADY) A.dim else A.accent, fontSize = 13.sp, maxLines = 1)
+                    }
+                    DropdownMenu(modeMenu, { modeMenu = false }) {
+                        com.aura.agent.agent.ThinkMode.entries.forEach { m ->
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(m.label, fontWeight = if (m == mode) FontWeight.SemiBold else FontWeight.Normal)
+                                        Text(m.blurb, fontSize = 12.sp, color = A.dim, modifier = Modifier.widthIn(max = 230.dp))
+                                    }
+                                },
+                                trailingIcon = { if (m == mode) AIcon(R.drawable.ic_check, tint = A.accent, size = 18.dp) },
+                                onClick = { modeMenu = false; onMode(m) },
+                            )
+                        }
+                    }
                 }
                 Spacer(Modifier.weight(1f))
                 val ready = running || value.isNotBlank() || attachments.isNotEmpty()

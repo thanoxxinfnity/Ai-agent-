@@ -81,13 +81,18 @@ object Llm {
         onText: (String) -> Unit,
         maxRetries: Int = 3,
         onWait: suspend (Int) -> Unit = {},
+        effort: String? = null,
     ): List<ToolCall> = withContext(Dispatchers.IO) {
         val responses = p.wire == "responses"
-        val body = if (responses) responsesBody(model, system, msgs, tools) else chatBody(model, system, msgs, tools)
-        val url = p.baseUrl.trimEnd('/') + if (responses) "/responses" else "/chat/completions"
-        val req = Request.Builder().url(url)
-            .post(body.toString().toRequestBody(Http.JSON))
-            .header("Accept", "text/event-stream").auth(p).build()
+        val effortKey = p.id + "|" + model
+        var useEffort = effort != null && supportsEffort(p) && effortKey !in noEffort
+        fun makeReq(): Request {
+            val e = if (useEffort) effort else null
+            val body = if (responses) responsesBody(model, system, msgs, tools, e) else chatBody(model, system, msgs, tools, e)
+            val url = p.baseUrl.trimEnd('/') + if (responses) "/responses" else "/chat/completions"
+            return Request.Builder().url(url).post(body.toString().toRequestBody(Http.JSON)).header("Accept", "text/event-stream").auth(p).build()
+        }
+        var req = makeReq()
         val job = coroutineContext[Job]!!
         var attempt = 0
         var result: List<ToolCall>? = null
@@ -102,7 +107,11 @@ object Llm {
                         val code = resp.code
                         val errBody = resp.body?.string().orEmpty()
                         val hinted = resp.header("Retry-After")?.toLongOrNull() ?: parseRetryDelay(errBody)
-                        if (code in RETRYABLE && attempt < maxRetries) {
+                        if (code == 400 && useEffort && looksLikeReasoningRejection(errBody)) {
+                            // this model or host does not take a reasoning level: remember it and ask again without
+                            noEffort += effortKey; useEffort = false; req = makeReq(); wait = 0
+                            null
+                        } else if (code in RETRYABLE && attempt < maxRetries) {
                             wait = (hinted ?: (3L shl attempt)).coerceIn(1, 90)
                             attempt++
                             null
@@ -125,6 +134,21 @@ object Llm {
         Regex("\"retryDelay\"\\s*:\\s*\"([0-9.]+)s\"").find(body)?.let { return Math.ceil(it.groupValues[1].toDouble()).toLong() }
         return null
     }
+
+    private val noEffort = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    fun supportsEffort(p: Provider): Boolean = when (p.reasoning) {
+        "on" -> true
+        "off" -> false
+        else -> listOf("api.openai.com", "generativelanguage.googleapis.com", "api.groq.com", "api.x.ai").any { it in p.baseUrl }
+    }
+
+    fun looksLikeReasoningRejection(body: String): Boolean {
+        val b = body.lowercase()
+        return "reasoning" in b || ("unknown" in b && "param" in b) || "unrecognized" in b || "unsupported parameter" in b
+    }
+
+    fun resetEffortMemory() = noEffort.clear()
 
     private val RETRYABLE = setOf(408, 429, 500, 502, 503, 504)
 
@@ -165,9 +189,10 @@ object Llm {
 
     // ---------- request bodies ----------
 
-    private fun chatBody(model: String, system: String, msgs: List<LlmMsg>, tools: List<ToolDef>) = buildJsonObject {
+    private fun chatBody(model: String, system: String, msgs: List<LlmMsg>, tools: List<ToolDef>, effort: String?) = buildJsonObject {
         put("model", model)
         put("stream", true)
+        effort?.let { put("reasoning_effort", it) }
         putJsonArray("messages") {
             add(buildJsonObject { put("role", "system"); put("content", system) })
             for (m in msgs) add(buildJsonObject {
@@ -197,9 +222,10 @@ object Llm {
         }
     }
 
-    private fun responsesBody(model: String, system: String, msgs: List<LlmMsg>, tools: List<ToolDef>) = buildJsonObject {
+    private fun responsesBody(model: String, system: String, msgs: List<LlmMsg>, tools: List<ToolDef>, effort: String?) = buildJsonObject {
         put("model", model)
         put("stream", true)
+        effort?.let { e -> putJsonObject("reasoning") { put("effort", e) } }
         put("store", false)
         put("instructions", system)
         putJsonArray("input") {

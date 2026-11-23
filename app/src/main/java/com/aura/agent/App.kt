@@ -29,6 +29,8 @@ class App : Application() {
     lateinit var supabase: Supabase
     lateinit var voice: com.aura.agent.agent.Voice
     var geminiBase = com.aura.agent.net.GeminiTts.BASE
+    var vercelBase = "https://api.vercel.com"
+    var vercelPollMs = 3000L
     @Volatile var foreground = false
 
     override fun onCreate() {

@@ -32,6 +32,16 @@ class GitHub(private val token: String, private val api: String = "https://api.g
         }
     }
 
+    /** Downloads a binary resource (for example a repository tarball), following redirects, capped in size. */
+    suspend fun bytes(path: String, maxBytes: Int = 60 * 1024 * 1024): ByteArray = withContext(Dispatchers.IO) {
+        Http.client.newCall(builder(path).get().build()).execute().use { r ->
+            if (!r.isSuccessful) throw GhError(r.code, "GitHub ${r.code}: ${r.body?.string().orEmpty().take(200)}")
+            val len = r.body?.contentLength() ?: -1
+            if (len > maxBytes) throw GhError(413, "The repository is larger than ${maxBytes / 1024 / 1024} MB.")
+            r.body!!.bytes().also { if (it.size > maxBytes) throw GhError(413, "The repository is larger than ${maxBytes / 1024 / 1024} MB.") }
+        }
+    }
+
     suspend fun raw(path: String): String = withContext(Dispatchers.IO) {
         Http.client.newCall(builder(path).get().build()).execute().use { r ->
             val t = r.body?.string().orEmpty()

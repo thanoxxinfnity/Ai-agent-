@@ -27,6 +27,11 @@ class Mock {
     val script = ConcurrentLinkedQueue<MockResponse>()
     val mainRequests = CopyOnWriteArrayList<String>()
     val compactCount = java.util.concurrent.atomic.AtomicInteger()
+    var tarball: ByteArray = ByteArray(0)
+    val digests = CopyOnWriteArrayList<String>()
+    var vercelState = "READY"
+    var vercelPolls = java.util.concurrent.atomic.AtomicInteger()
+    val vercelCreate = ConcurrentLinkedQueue<MockResponse>()
     val altRequests = CopyOnWriteArrayList<String>()
     val scriptB = ConcurrentLinkedQueue<MockResponse>()
     val verifyResults = ConcurrentLinkedQueue<String>()
@@ -52,6 +57,14 @@ class Mock {
                 bodies += (r.method + " " + p) to body
                 return when {
                     p.startsWith("/v2/chat/completions") -> if (body.contains("You write chat titles")) text("Title from provider B here") else { altRequests += body; scriptB.poll() ?: text("from B") }
+                    p.startsWith("/gh/repos/octo/r/tarball") -> MockResponse().setHeader("Content-Type", "application/gzip").setBody(okio.Buffer().write(tarball))
+                    p.startsWith("/vc/v2/user") -> json("{\"user\":{\"username\":\"vercel-user\"}}")
+                    p.startsWith("/vc/v2/files") -> { r.getHeader("x-vercel-digest")?.let { digests += it }; json("{}") }
+                    p.startsWith("/vc/v13/deployments") && r.method == "POST" -> vercelCreate.poll() ?: json("{\"id\":\"dpl_1\",\"url\":\"my-site-abc123.vercel.app\",\"readyState\":\"QUEUED\",\"alias\":[]}")
+                    p.startsWith("/vc/v13/deployments/dpl_1") -> if (vercelPolls.incrementAndGet() < 2) json("{\"id\":\"dpl_1\",\"url\":\"my-site-abc123.vercel.app\",\"readyState\":\"BUILDING\"}")
+                        else if (vercelState == "READY") json("{\"id\":\"dpl_1\",\"url\":\"my-site-abc123.vercel.app\",\"readyState\":\"READY\",\"alias\":[\"my-site.vercel.app\"]}")
+                        else json("{\"id\":\"dpl_1\",\"url\":\"my-site-abc123.vercel.app\",\"readyState\":\"ERROR\",\"errorMessage\":\"Build failed\"}")
+                    p.startsWith("/vc/v3/deployments/dpl_1/events") -> json("[{\"text\":\"Running npm run build\"},{\"payload\":{\"text\":\"Error: Module not found: x\"}}]")
                     p.startsWith("/v1/responses") -> { mainRequests += body; MockResponse().setHeader("Content-Type", "text/event-stream").setBody("data: {\"type\":\"response.output_text.delta\",\"delta\":\"responses ok\"}\n\ndata: {\"type\":\"response.completed\"}\n\n") }
                     p.startsWith("/gh/repos/octo/r/contents/uploads/") || p.startsWith("/gh/repos/octo/r/contents/data.bin") -> if (r.method == "GET") json("{}", 404) else json("{}", 201)
                     p.startsWith("/v1/chat/completions") -> when {
@@ -188,23 +201,24 @@ class ProTest {
         assertTrue("auto-check nudge was inserted", r.msgs.any { it.role == "note" && it.content.contains("verify_project") })
         val v = tools(r).filter { it.toolName == "verify_project" }
         assertEquals(2, v.size)
-        assertTrue(v[0].content, v[0].content.startsWith("VERIFY FAIL (attempt 1 of 5)") && v[0].content.contains("SyntaxError"))
+        assertTrue(v[0].content, v[0].content.startsWith("VERIFY FAIL (attempt 1 of ${ThinkMode.STEADY.verify})") && v[0].content.contains("SyntaxError"))
         assertTrue(v[1].content, v[1].content.startsWith("VERIFY PASS"))
         assertEquals("All green", r.msgs.last { it.role == "assistant" }.content)
         assertTrue(m.log.contains("POST /gh/user/codespaces/cs1/stop"))
     }
 
-    @Test fun verify_stops_after_five_failures() = runBlocking {
+    @Test fun verify_stops_after_the_modes_attempt_limit() = runBlocking {
         val m = Mock().start(); val app = setup(m)
-        repeat(6) { m.verifyResults += "boom\nVERIFY_RESULT: FAIL\n" }
+        val limit = ThinkMode.STEADY.verify
+        repeat(limit + 2) { m.verifyResults += "boom\nVERIFY_RESULT: FAIL\n" }
         val cloud = app.newCloudSession()
         val ctx = ToolCtx(app, "c", "t", cloud, java.io.File("/tmp"))
-        val outs = (1..6).map { Tools.execute(ctx, "verify_project", "{}") }
+        val outs = (1..limit + 1).map { Tools.execute(ctx, "verify_project", "{}") }
         cloud.stop()
-        assertTrue(outs[0].startsWith("VERIFY FAIL (attempt 1 of 5)"))
-        assertTrue(outs[4], outs[4].contains("attempt 5 of 5") && outs[4].contains("MAX_RETRIES_REACHED"))
-        assertTrue(outs[5], outs[5].startsWith("MAX_RETRIES_REACHED"))
-        assertEquals("no 6th build is started", 5, m.bodies.count { it.first == "POST /cs/exec_stream" })
+        assertTrue(outs[0].startsWith("VERIFY FAIL (attempt 1 of $limit)"))
+        assertTrue(outs[limit - 1], outs[limit - 1].contains("attempt $limit of $limit") && outs[limit - 1].contains("MAX_RETRIES_REACHED"))
+        assertTrue(outs[limit], outs[limit].startsWith("MAX_RETRIES_REACHED"))
+        assertEquals("no extra build is started", limit, m.bodies.count { it.first == "POST /cs/exec_stream" })
     }
 
     // ---------------------------------------------------------------- 3. search tools and sub-agents

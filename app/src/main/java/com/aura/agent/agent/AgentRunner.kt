@@ -82,20 +82,21 @@ class AgentRunner(private val app: App) {
         val state = RunState()
         val outDir = java.io.File(app.filesDir, "cloud_out")
         val activeRepo = dao.chat(chatId)?.repo.orEmpty()
+        val mode = store.thinkMode.value
         fun mk(emit: (String) -> Unit): ToolCtx {
             val ref = arrayOfNulls<ToolCtx>(1)
             val c = ToolCtx(
                 app, chatId, turnId, cloud, outDir, state, emit,
                 approve = { t, d -> askApproval(chatId, t, d) },
                 subAgents = { tasks -> subAgents.run(tasks, ref[0]!!) },
-                activeRepo = activeRepo,
+                activeRepo = activeRepo, mode = mode,
             )
             ref[0] = c
             return c
         }
         try {
-            repeat(MAX_STEPS) { stepIdx ->
-                val stepNo = stepIdx + 1
+            var stepNo = 0   // one step = one model turn; running its tools does not use up another step
+            while (true) {
                 val msgs = dao.messagesOnce(chatId)
                 // drop an empty assistant placeholder left by an interrupted run
                 msgs.lastOrNull()?.takeIf { it.role == "assistant" && it.content.isBlank() && it.toolCalls == null }?.let { dao.deleteMessage(it.id) }
@@ -103,22 +104,26 @@ class AgentRunner(private val app: App) {
                 val pending = pendingCalls(history)
                 if (pending.isNotEmpty()) {
                     for (c in pending) execTool(chatId, c, ::mk, stepNo)
-                    return@repeat
+                    continue
                 }
-                val last = history.lastOrNull() ?: return@repeat
+                val last = history.lastOrNull() ?: break
                 if (last.role == "assistant") return finish(chatId, null)
+                if (stepNo >= mode.steps) {
+                    failed = "Stopped after ${mode.steps} steps. Send a message to continue, or pick a deeper thinking mode for longer tasks."
+                    break
+                }
                 maybeCompact(chatId, force = false)
+                stepNo++
                 val calls = generateWithRetry(chatId) { assistantId = it }
                 if (calls.isEmpty()) {
-                    if (needsVerify(state)) {
+                    if (needsVerify(state, mode)) {
                         state.nudges++
                         dao.upsertMessage(MessageEntity(Ids.id(), chatId, "note", NUDGE, Ids.now()))
-                        return@repeat
+                        continue
                     }
                     return finish(chatId, null)
                 }
             }
-            failed = "Stopped after $MAX_STEPS steps. Send a message to continue."
         } catch (e: CancellationException) {
             withContext(NonCancellable) { flushPartial(assistantId) }
             if (userStopped.remove(chatId)) { withContext(NonCancellable) { finish(chatId, null, notify = false) }; return }
@@ -130,8 +135,8 @@ class AgentRunner(private val app: App) {
         finish(chatId, failed)
     }
 
-    private fun needsVerify(s: RunState) =
-        s.modified && !s.verified && s.nudges < 2 && s.verifyFailures < ToolsPro.MAX_VERIFY && store.codespacePat.value.isNotBlank()
+    private fun needsVerify(s: RunState, mode: ThinkMode) =
+        mode.autoVerify && s.modified && !s.verified && s.nudges < 2 && s.verifyFailures < mode.verify && store.codespacePat.value.isNotBlank()
 
     // ------------------------------------------------------------ approvals
 
@@ -242,7 +247,8 @@ class AgentRunner(private val app: App) {
     }).toString()
 
     private suspend fun execTool(chatId: String, c: ToolCall, mk: ((String) -> Unit) -> ToolCtx, step: Int = 0) {
-        status.value = Tools.label(c.name) + if (step > 0) " (step $step of $MAX_STEPS)" else ""
+        val ctxMode = mk {}.mode
+        status.value = Tools.label(c.name) + if (step > 0) " (step $step of ${ctxMode.steps})" else ""
         val msgId = Ids.id()
         val placeholder = MessageEntity(msgId, chatId, "tool", "", Ids.now(), toolCallId = c.id, toolName = c.name, toolArgs = c.args)
         dao.upsertMessage(placeholder)
@@ -283,7 +289,7 @@ class AgentRunner(private val app: App) {
         dao.upsertMessage(placeholder.copy(content = shown.ifBlank { "(no output)" }, isError = bad))
         live.update { it - msgId }
         if (repeats >= 5) throw LlmError("Aura stopped: the agent kept getting the same result from ${Tools.label(c.name)} without progress. Send a message with more guidance.")
-        if (state.errorStreak >= 6) throw LlmError("Aura stopped: 6 steps in a row failed. Last error: ${result.take(200)}")
+        if (state.errorStreak >= ctxMode.streak) throw LlmError("Aura stopped: ${ctxMode.streak} steps in a row failed. Last error: ${result.take(200)}")
     }
 
     private suspend fun generateWithRetry(chatId: String, onId: (String) -> Unit): List<ToolCall> {
@@ -307,11 +313,12 @@ class AgentRunner(private val app: App) {
         var lastEmit = 0L
         val calls = try {
             LlmRouter.stream(
-                store, systemPrompt(dao.chat(chatId)?.repo.orEmpty()), llm, Tools.defs,
+                store, systemPrompt(dao.chat(chatId)?.repo.orEmpty(), store.thinkMode.value), llm, Tools.defs,
                 LlmRouter.Hooks(
                     onSwitch = { msg -> dao.upsertMessage(MessageEntity(Ids.id(), chatId, "switch", msg, placeholder.createdAt - 1)) },
                     onWait = { sec -> status.value = "Rate limited, retrying in ${sec}s" },
                 ),
+                effort = store.thinkMode.value.effort,
             ) { chunk ->
                 sb.append(chunk)
                 val now = System.currentTimeMillis()
@@ -376,9 +383,9 @@ class AgentRunner(private val app: App) {
         status.value = "Thinking"
     }
 
-    private fun systemPrompt(repo: String = ""): String {
+    private fun systemPrompt(repo: String = "", mode: ThinkMode = ThinkMode.STEADY): String {
         val skills = store.enabledSkills()
-        val base = SYSTEM + if (repo.isNotBlank()) "\n\nActive repository for this chat: $repo. Repo tools use it by default and the codespace opens it automatically. Other repositories can be cloned with cloud_clone." else "\n\nNo repository was chosen for this chat. If the user wants code written, ask which repository to use or create one with github_create_repo."
+        val base = SYSTEM + (if (mode.prompt.isNotBlank()) "\n\n" + mode.prompt else "") + if (repo.isNotBlank()) "\n\nActive repository for this chat: $repo. Repo tools use it by default and the codespace opens it automatically. Other repositories can be cloned with cloud_clone." else "\n\nNo repository was chosen for this chat. If the user wants code written, ask which repository to use or create one with github_create_repo."
         if (skills.isEmpty()) return base
         return base + "\n\nAvailable skills (call use_skill with the name to load the full instructions when the task matches):\n" +
             skills.joinToString("\n") { "- ${it.name}: ${it.description}" }
@@ -444,7 +451,6 @@ class AgentRunner(private val app: App) {
     }
 
     companion object {
-        const val MAX_STEPS = 50
         val LOOP_EXEMPT = setOf("verify_project", "github_wait_run", "github_list_runs", "github_run_logs", "playwright_call", "agent_browser", "cloud_exec")
         const val HISTORY_LIMIT = 120
 
@@ -458,7 +464,7 @@ class AgentRunner(private val app: App) {
             return t
         }
 
-        const val NUDGE = "[auto-check] You changed files but have not run verify_project yet. If the project is in the codespace, run verify_project now, fix every error with edit_file_diff or cloud_edit_file and run it again until it prints VERIFY PASS (at most 5 attempts). If the code only exists in a GitHub repository, clone it into the codespace first with `gh repo clone owner/name` (GH_TOKEN is already set), or rely on the repository's CI run. Then give the user a short summary."
+        const val NUDGE = "[auto-check] You changed files but have not run verify_project yet. If the project is in the codespace, run verify_project now, fix every error with edit_file_diff or cloud_edit_file and run it again until it prints VERIFY PASS (the tool says when the attempt limit is reached). If the code only exists in a GitHub repository, clone it into the codespace first with `gh repo clone owner/name` (GH_TOKEN is already set), or rely on the repository's CI run. Then give the user a short summary."
 
         const val COMPACT_PROMPT = "Compress this agent transcript into working memory so the agent can continue seamlessly. Use these sections: " +
             "ACTIVE FILES AND STATE (repositories, branches, file paths and what changed in each, build or CI status, run ids, URLs), DECISIONS (what was chosen and why), " +
@@ -471,10 +477,11 @@ You have GitHub tools that act with the user's token. When the user wants an app
 1. Plan briefly, then create the repository with github_create_repo.
 2. Push the complete source with github_write_files, many files per commit. Never leave placeholders.
 3. For Android apps add .github/workflows/build.yml that builds an APK: checkout, actions/setup-java (temurin 17), gradle/actions/setup-gradle with an explicit gradle-version, run gradle assembleDebug (or assembleRelease with a committed keystore), upload the APK with actions/upload-artifact, and publish it with softprops/action-gh-release (permissions: contents: write). Do not rely on a gradle wrapper jar.
-4. Start it with github_run_workflow (or it runs on push), then github_wait_run. If it fails, read github_run_logs, fix the code with edit_file_diff, push and run it again. Try at most 5 times; after that stop and tell the user exactly what still fails.
+4. Start it with github_run_workflow (or it runs on push), then github_wait_run. If it fails, read github_run_logs, fix the code with edit_file_diff, push and run it again. The build tools tell you when the attempt limit for this thinking mode is reached; then stop and tell the user exactly what still fails.
 5. Finish by giving the user the repository URL and the APK download link from github_latest_release.
 Cloud and browser: for heavy tasks (builds, tests, installs, long scripts) use cloud_exec, which runs in the user's own GitHub Codespace; fetch results with cloud_download. For anything that needs a real browser (open live sites, scrape, fill forms, test a UI, verify a deployed app) use agent_browser (CLI, good default) or playwright_tools and playwright_call (Playwright MCP). Both run headless in the codespace. The codespace is stopped automatically when your task ends, so do not try to stop it. If a cloud tool returns NO_CODESPACE_TOKEN, politely tell the user to add their GitHub Codespace token in Settings first.
-Working rules: never rewrite an existing file. Find code with search_code and find_files, read only the lines you need with read_lines, then change it with edit_file_diff (GitHub repo) or cloud_edit_file (codespace) using the exact existing text. If a tool reports a mismatch, read the lines again and retry. Never write placeholders such as "// ... rest of code". After every code change run verify_project and fix the errors it reports until it prints VERIFY PASS (at most 5 attempts). For large investigations hand focused questions to delegate so your own context stays small. Dangerous commands ask the user for approval; if you get DENIED do not retry it. Every turn is checkpointed, so the user can undo it.
+Working rules: never rewrite an existing file. Find code with search_code and find_files, read only the lines you need with read_lines, then change it with edit_file_diff (GitHub repo) or cloud_edit_file (codespace) using the exact existing text. If a tool reports a mismatch, read the lines again and retry. Never write placeholders such as "// ... rest of code". After every code change run verify_project and fix the errors it reports until it prints VERIFY PASS (the tool says when the attempt limit is reached). For large investigations hand focused questions to delegate so your own context stays small. Dangerous commands ask the user for approval; if you get DENIED do not retry it. Every turn is checkpointed, so the user can undo it.
+Publishing websites: when the user wants a site online and Vercel is connected, call vercel_deploy (for plain HTML point directory at the folder that holds index.html, for frameworks deploy the repository root, Vercel builds it) and put the live link in your final answer. If it returns NO_VERCEL_TOKEN, politely tell the user to add their Vercel token in Settings > Vercel. If the build fails, read the log it returns, fix the code and deploy again.
 Keep replies short and clear. Use Markdown for code. If a tool returns an ERROR, explain it simply and fix what you can.
 """.trimIndent()
     }

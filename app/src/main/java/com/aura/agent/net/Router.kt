@@ -75,12 +75,12 @@ object LlmRouter {
      */
     suspend fun stream(
         store: Store, system: String, msgs: List<LlmMsg>, tools: List<ToolDef>,
-        hooks: Hooks = Hooks(), onText: (String) -> Unit,
+        hooks: Hooks = Hooks(), effort: String? = null, onText: (String) -> Unit,
     ): List<ToolCall> {
         val auto = store.autoMode.value
         val cands = if (auto) store.candidates() else listOfNotNull(store.current())
         if (cands.isEmpty()) throw LlmError("No model selected. Open Settings, add a provider and pick a model.")
-        if (!auto) return Llm.stream(cands[0].first, cands[0].second, system, msgs, tools, onText, 3, hooks.onWait)
+        if (!auto) return Llm.stream(cands[0].first, cands[0].second, system, msgs, tools, onText, 3, hooks.onWait, effort)
 
         val ready = cands.filter { Cooldowns.remaining(Cooldowns.key(it.first, it.second)) == 0L }
         val cooling = cands.filter { Cooldowns.remaining(Cooldowns.key(it.first, it.second)) > 0 }.sortedBy { Cooldowns.remaining(Cooldowns.key(it.first, it.second)) }
@@ -94,7 +94,7 @@ object LlmRouter {
             if (rem > 0) for (left in (rem / 1000).toInt().coerceIn(1, 60) downTo 1) { hooks.onWait(left); delay(1000) }
             if (i > 0) hooks.onSwitch("Switched to ${c.second} (${c.first.name}) because ${queue[i - 1].second} $why.")
             try {
-                return Llm.stream(c.first, c.second, system, msgs, tools, { emitted = true; onText(it) }, if (i == queue.lastIndex) 3 else 0, hooks.onWait)
+                return Llm.stream(c.first, c.second, system, msgs, tools, { emitted = true; onText(it) }, if (i == queue.lastIndex) 3 else 0, hooks.onWait, effort)
             } catch (e: LlmError) {
                 if (emitted || !switchable(e)) throw e
                 Cooldowns.mark(key, cooldownMs(e)); lastErr = e; why = "is not available: " + reason(e).removePrefix("it ")

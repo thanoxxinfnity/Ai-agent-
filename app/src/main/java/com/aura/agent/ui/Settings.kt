@@ -235,6 +235,51 @@ fun VoiceSection(vm: MainVM) {
 }
 
 @Composable
+fun VercelSection(vm: MainVM) {
+    val scope = rememberCoroutineScope()
+    val token by vm.store.vercelToken.collectAsState()
+    val user by vm.store.vercelUser.collectAsState()
+    val team by vm.store.vercelTeam.collectAsState()
+    var input by remember { mutableStateOf("") }
+    var teamInput by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf("") }
+    if (token.isNotBlank()) {
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(A.surface).border(1.dp, A.border, RoundedCornerShape(16.dp)).padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AIcon(R.drawable.ic_bolt, tint = A.accent)
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Row(
+                    Modifier.clip(CircleShape).background(A.ok.copy(alpha = 0.15f)).padding(horizontal = 10.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AIcon(R.drawable.ic_check, tint = A.ok, size = 14.dp); Spacer(Modifier.width(4.dp))
+                    Text("Connected", color = A.ok, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                }
+                Text(user + if (team.isNotBlank()) "  (team)" else "", color = A.dim, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+            }
+            PillButton("Remove", { vm.removeVercel() }, primary = false, danger = true)
+        }
+    } else {
+        Field("Vercel token", input, { input = it; error = "" }, placeholder = "paste your token", secret = true, mono = true, tag = "vercel-token")
+        Spacer(Modifier.height(10.dp))
+        Field("Team ID (optional)", teamInput, { teamInput = it; error = "" }, placeholder = "team_xxx, only for team projects", mono = true)
+        Spacer(Modifier.height(10.dp))
+        Text("Create a token at vercel.com/account/tokens. Then the agent can publish websites for you and send the live link.", color = A.dim, fontSize = 13.sp, lineHeight = 19.sp)
+        Spacer(Modifier.height(12.dp))
+        PillButton("Save and verify", {
+            busy = true; error = ""
+            scope.launch { vm.connectVercel(input, teamInput).onSuccess { input = ""; teamInput = "" }.onFailure { error = it.message ?: "Could not verify this token" }; busy = false }
+        }, enabled = input.isNotBlank(), loading = busy, modifier = Modifier.testTag("vercel-save"))
+        if (error.isNotBlank()) Text(error, color = A.danger, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 8.dp))
+    }
+    Text("The token is stored only on this device (encrypted). Production deployments ask for your approval first.", color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 12.dp))
+}
+
+@Composable
 fun GithubButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
     Row(
         modifier.fillMaxWidth().clip(CircleShape).background(A.text).clickable(onClick = onClick).padding(horizontal = 22.dp, vertical = 15.dp),
@@ -359,6 +404,7 @@ fun SettingsScreen(vm: MainVM) {
             }
             item { Section("GitHub") { GithubSignIn(vm) } }
             item { Section("GitHub Codespace Token (PAT)") { CodespaceToken(vm) } }
+            item { Section("Vercel (deploy websites)") { VercelSection(vm) } }
             item { Section("Voice (read aloud)") { VoiceSection(vm) } }
             item {
                 val guard by vm.store.guardrails.collectAsState()
@@ -509,13 +555,14 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
     var importOpen by remember { mutableStateOf(false) }
     var manual by remember(route) { mutableStateOf("") }
     var rpm by remember(route) { mutableStateOf(existing?.rpm?.takeIf { it > 0 }?.toString() ?: "") }
+    var reasoning by remember(route) { mutableStateOf(existing?.reasoning ?: "auto") }
 
     fun build() = Provider(
         id = existing?.id ?: Ids.id(), name = name.trim(), baseUrl = baseUrl.trim().trimEnd('/'), apiKey = apiKey.trim(), wire = wire,
         modelsUrl = modelsUrl.trim(),
         headers = headers.lines().mapNotNull { l -> l.split(":", limit = 2).takeIf { it.size == 2 && it[0].isNotBlank() }?.let { it[0].trim() to it[1].trim() } }.toMap(),
         models = models, defaultModel = defaultModel.ifBlank { models.firstOrNull().orEmpty() },
-        rpm = rpm.toIntOrNull()?.coerceIn(0, 100000) ?: 0,
+        rpm = rpm.toIntOrNull()?.coerceIn(0, 100000) ?: 0, reasoning = reasoning,
     )
     val built = remember { mutableStateOf<Provider?>(null) }
 
@@ -536,6 +583,13 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
                 }
             }
             item { Field("Models URL (optional)", modelsUrl, { modelsUrl = it }, placeholder = "defaults to base URL + /models") }
+            item {
+                Column {
+                    Text("Send the thinking level (reasoning effort)", color = A.dim, fontSize = 12.sp, modifier = Modifier.padding(bottom = 6.dp, start = 2.dp))
+                    Segmented(listOf("auto" to "Auto", "on" to "Always", "off" to "Never"), reasoning) { reasoning = it }
+                    Text("Auto sends it only to hosts known to accept it (OpenAI, Gemini, Groq, xAI). If a model rejects it, Aura retries without it.", color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 6.dp, start = 2.dp))
+                }
+            }
             item { Field("Requests per minute limit (optional)", rpm, { rpm = it.filter { c -> c.isDigit() }.take(5) }, placeholder = "empty = automatic (Gemini 10, NVIDIA 30)") }
             item { Field("Extra headers (one per line)", headers, { headers = it }, singleLine = false, minLines = 2, mono = true, placeholder = "x-header: value") }
             item {

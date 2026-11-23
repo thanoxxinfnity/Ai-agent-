@@ -189,6 +189,15 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         user
     }
 
+    suspend fun connectVercel(token: String, team: String): Result<String> = runCatching {
+        val t = token.trim(); val tm = team.trim()
+        val user = com.aura.agent.net.Vercel(t, tm, a.vercelBase).whoami()
+        store.setVercel(t, user, tm)
+        user
+    }
+
+    fun removeVercel() { store.setVercel("", "", "") }
+
     fun removeCodespace() { store.setCodespace("", "") }
 
     fun disconnectGithub() = store.setGithub("", "")
