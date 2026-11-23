@@ -99,13 +99,15 @@ fun MainScreen(vm: MainVM) {
                 when (val r = shown) {
                     is Route.Provider -> ProviderEditor(vm, r)
                     Route.Memory -> MemoryScreen(vm)
+                    Route.Mcp -> McpScreen(vm)
+                    Route.McpBrowse -> McpBrowseScreen(vm)
                     else -> SettingsScreen(vm)
                 }
             }
         }
         if (ghToken.isBlank() && !skipped) LoginGate(vm) { skipped = true }
     }
-    BackHandler0(route != Route.Chat) { vm.go(if (route is Route.Provider || route == Route.Memory) Route.Settings else Route.Chat) }
+    BackHandler0(route != Route.Chat) { vm.go(when { route == Route.McpBrowse -> Route.Mcp; route is Route.Provider || route == Route.Memory || route == Route.Mcp -> Route.Settings; else -> Route.Chat }) }
 }
 
 @Composable
@@ -669,7 +671,7 @@ private fun RepoPicker(vm: MainVM, onDismiss: () -> Unit) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(0.88f).padding(horizontal = 16.dp)) {
             Text("Choose a repository", color = A.text, fontFamily = FontFamily.Serif, fontSize = 24.sp, modifier = Modifier.padding(vertical = 6.dp))
             Text("Pick it now: it is fixed for this chat. The agent can still clone other repositories later.", color = A.dim, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(bottom = 10.dp))
-            LazyColumn(Modifier.weight(1f)) {
+            LazyColumn(Modifier.weight(1f).testTag("repo-list")) {
                 item {
                     if (pinned.isNotBlank()) Row(
                         Modifier.fillMaxWidth().padding(bottom = 6.dp).clip(RoundedCornerShape(14.dp)).background(A.bubble).padding(start = 14.dp, top = 6.dp, bottom = 6.dp, end = 6.dp),
@@ -723,6 +725,7 @@ private fun RepoPicker(vm: MainVM, onDismiss: () -> Unit) {
                 items(repos.filter { q.isBlank() || it.full.contains(q, true) }, key = { it.full }) { r ->
                     RepoRow(r.full, r.description.ifBlank { if (r.private) "Private" else "Public" }, r.full == selected, lock = r.private, pinned = r.full == pinned, onPin = { vm.pinRepo(if (r.full == pinned) "" else r.full) }) { vm.pendingRepo.value = r.full; onDismiss() }
                 }
+                item { PickerFolders(vm) }
             }
         }
     }

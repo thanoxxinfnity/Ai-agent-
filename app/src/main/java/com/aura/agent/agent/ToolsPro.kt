@@ -91,6 +91,7 @@ object ToolsPro {
     val READ_ONLY = setOf(
         "search_code", "find_files", "read_lines", "github_read_file", "github_list_files", "github_whoami", "web_search", "web_fetch",
         "github_list_repos", "github_list_runs", "github_latest_release", "use_skill",
+        "folder_list", "folder_read", "folder_search", "mcp_list",
     )
 
     private fun JsonObject.s(k: String) = (this[k] as? JsonPrimitive)?.contentOrNull
@@ -100,7 +101,7 @@ object ToolsPro {
 
     private fun decode(b64: String?) = String(Base64.getMimeDecoder().decode(b64.orEmpty()))
 
-    private suspend fun gh(ctx: ToolCtx): Pair<GitHub, String>? {
+    internal suspend fun gh(ctx: ToolCtx): Pair<GitHub, String>? {
         val token = ctx.store.githubToken.value
         if (token.isBlank()) return null
         val g = GitHub(token, ctx.app.cloudApi)
@@ -161,6 +162,7 @@ object ToolsPro {
         val text = decode(cur.s("content"))
         val r = Patch.apply(text, a.s("search").orEmpty(), a.s("replace").orEmpty(), a.b("replace_all") == true)
         val ok = r as? PatchResult.Ok ?: return "ERROR: edit_file_diff failed - ${(r as PatchResult.Fail).message}"
+        SecretScan.checkOne(path, ok.text)?.let { return it }
         val head = g.call("GET", "/repos/$repo/git/ref/heads/$branch").let { (it as JsonObject)["object"].s("sha")!! }
         Checkpoints(ctx.app).recordGithub(ctx, repo, branch, head, "edit $path")
         g.call("PUT", "/repos/$repo/contents/$path", buildJsonObject {
@@ -206,6 +208,8 @@ object ToolsPro {
     /** Commits one binary or text file to a repo (creating or replacing it), after saving a checkpoint. */
     suspend fun commitBytes(ctx: ToolCtx, repoArg: String?, path: String, bytes: ByteArray, message: String, branchArg: String?): String {
         val (g, me) = gh(ctx) ?: return "ERROR: No GitHub token. Ask the user to sign in first."
+        SecretScan.blockedPath(path)?.let { return "BLOCKED: $it. Secrets are never pushed to GitHub." }
+        if (bytes.none { it.toInt() == 0 }) SecretScan.find(String(bytes, Charsets.UTF_8))?.let { return "BLOCKED: $path contains $it. Secrets are never pushed to GitHub." }
         val repo = (repoArg?.takeIf { it.isNotBlank() } ?: ctx.activeRepo.ifBlank { null } ?: return "ERROR: repo required (choose a repository when the chat starts or pass repo).")
             .let { if ("/" in it) it else "$me/$it" }
         val branch = branchArg ?: g.call("GET", "/repos/$repo").s("default_branch")!!

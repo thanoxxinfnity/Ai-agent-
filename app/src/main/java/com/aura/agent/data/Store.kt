@@ -188,9 +188,17 @@ class Store(ctx: Context) {
     }
 
     fun upsertProvider(p: Provider) {
+        com.aura.agent.net.Llm.resetLearnedWire()   // an edit by the user overrides what was learned
         val cur = _providers.value
         saveProviders(if (cur.any { it.id == p.id }) cur.map { if (it.id == p.id) p else it } else cur + p)
         if (_activeProvider.value.isBlank()) select(p.id, p.defaultModel.ifBlank { p.models.firstOrNull().orEmpty() })
+    }
+
+    /** Remember which API style a provider really speaks (learned from its own error messages). */
+    fun setWire(providerId: String, wire: String) {
+        val cur = _providers.value
+        if (cur.none { it.id == providerId && it.wire != wire }) return
+        saveProviders(cur.map { if (it.id == providerId) it.copy(wire = wire) else it })
     }
 
     fun deleteProvider(id: String) {

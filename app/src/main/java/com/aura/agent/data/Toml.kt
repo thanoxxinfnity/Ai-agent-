@@ -16,7 +16,7 @@ object Toml {
             val k = line.substring(0, eq).trim()
             val v = line.substring(eq + 1).trim()
             if (section.startsWith("model_providers.")) {
-                val name = section.removePrefix("model_providers.")
+                val name = section.removePrefix("model_providers.").trim().trim('"', '\'')
                 if (k == "http_headers") {
                     headers[name] = Regex("\"([^\"]+)\"\\s*=\\s*\"([^\"]*)\"").findAll(v).associate { it.groupValues[1] to it.groupValues[2] }
                 } else tables.getOrPut(name) { HashMap() }[k] = unquote(v)

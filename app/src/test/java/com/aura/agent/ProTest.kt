@@ -36,6 +36,7 @@ class Mock {
     val vercelCreate = ConcurrentLinkedQueue<MockResponse>()
     /** answers served first for any /gh/ request (to simulate temporary GitHub errors) */
     val ghFirst = ConcurrentLinkedQueue<MockResponse>()
+    @Volatile var gitDiff = ""
     val altRequests = CopyOnWriteArrayList<String>()
     val scriptB = ConcurrentLinkedQueue<MockResponse>()
     val verifyResults = ConcurrentLinkedQueue<String>()
@@ -88,6 +89,9 @@ class Mock {
                     p == "/gh/repos/octo/r/git/ref/heads/main" -> if (r.method == "GET") json("{\"object\":{\"sha\":\"h1\"}}") else json("{}")
                     p == "/gh/repos/octo/r/git/refs" -> json("{}", 201)
                     p == "/gh/repos/octo/r/git/refs/heads/main" -> json("{}")
+                    p == "/gh/repos/octo/r/git/blobs" -> json("{\"sha\":\"b1\"}", 201)
+                    p == "/gh/repos/octo/r/git/trees" -> json("{\"sha\":\"t2\"}", 201)
+                    p == "/gh/repos/octo/r/git/commits" -> json("{\"sha\":\"c2\"}", 201)
                     p == "/gh/repos/octo/r/git/commits/h1" -> json("{\"tree\":{\"sha\":\"t1\"}}")
                     p.startsWith("/gh/repos/octo/r/git/trees/") -> json("{\"tree\":[{\"path\":\"src/A.kt\",\"type\":\"blob\",\"size\":3000},{\"path\":\"README.md\",\"type\":\"blob\",\"size\":10}]}")
                     p.startsWith("/gh/user/codespaces?") -> json("{\"codespaces\":[]}")
@@ -102,6 +106,7 @@ class Mock {
                         val env = o["env"]?.jsonObject
                         val out = when {
                             o["cmd"]!!.jsonPrimitive.content.contains("rev-parse --show-toplevel") -> "/workspaces/aura-workspace\n"
+                            o["cmd"]!!.jsonPrimitive.content.contains("git diff --no-color") -> gitDiff
                             env?.get("AURA_CP_ID") != null -> "CP abc123\n"
                             env?.get("AURA_SHA") != null -> "RESTORED\n"
                             else -> "done\n"

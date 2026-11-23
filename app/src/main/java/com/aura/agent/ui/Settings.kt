@@ -80,7 +80,7 @@ fun PillButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier,
 }
 
 @Composable
-private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
+internal fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxWidth().padding(top = 26.dp)) {
         Text(title, color = A.text, fontFamily = FontFamily.Serif, fontSize = 20.sp, modifier = Modifier.padding(bottom = 12.dp, start = 2.dp))
         content()
@@ -88,7 +88,7 @@ private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) 
 }
 
 @Composable
-private fun Segmented(options: List<Pair<String, String>>, selected: String, onSelect: (String) -> Unit) {
+internal fun Segmented(options: List<Pair<String, String>>, selected: String, onSelect: (String) -> Unit) {
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(A.bubble).padding(4.dp)) {
         options.forEach { (key, label) ->
             val sel = key == selected
@@ -414,8 +414,8 @@ fun SettingsScreen(vm: MainVM) {
                     }
                     Text("Add a provider", color = A.dim, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp, start = 2.dp))
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("gemini" to "Gemini", "nvidia" to "NVIDIA", "openai" to "OpenAI", "custom" to "Custom endpoint").forEach { (k, l) ->
-                            PillButton(l, { vm.go(Route.Provider(null, k)) }, primary = false)
+                        listOf("paste" to "Paste full config", "gemini" to "Gemini", "nvidia" to "NVIDIA", "openai" to "OpenAI", "custom" to "Custom endpoint").forEach { (k, l) ->
+                            PillButton(l, { vm.go(Route.Provider(null, k)) }, primary = false, modifier = if (k == "paste") Modifier.testTag("paste-config-add") else Modifier)
                         }
                     }
                 }
@@ -423,6 +423,10 @@ fun SettingsScreen(vm: MainVM) {
             item { Section("GitHub") { GithubSignIn(vm) } }
             item { Section("GitHub Codespace Token (PAT)") { CodespaceToken(vm) } }
             item { Section("Vercel (deploy websites)") { VercelSection(vm) } }
+            item { Section("Free providers (no API key)") { FreeProvidersSection(vm) } }
+            item { Section("MCP servers") { McpEntry(vm) } }
+            item { Section("Phone folders") { FoldersSection(vm) } }
+            item { Section("Answers") { LongAnswersSection(vm) } }
             item { Section("Memory") { MemoryEntry(vm) } }
             item { Section("Voice (read aloud)") { VoiceSection(vm) } }
             item {
@@ -568,6 +572,7 @@ private val presets = mapOf(
     "openai" to Preset("OpenAI", "https://api.openai.com/v1"),
     "local" to Preset("Local server", "http://192.168.1.10:11434/v1"),
     "custom" to Preset("", ""),
+    "paste" to Preset("", ""),
 )
 
 @Composable
@@ -586,7 +591,7 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
     var query by remember(route) { mutableStateOf("") }
     var busy by remember(route) { mutableStateOf(false) }
     var error by remember(route) { mutableStateOf("") }
-    var importOpen by remember { mutableStateOf(false) }
+    var importOpen by remember(route) { mutableStateOf(existing == null && route.preset == "paste") }
     var manual by remember(route) { mutableStateOf("") }
     var rpm by remember(route) { mutableStateOf(existing?.rpm?.takeIf { it > 0 }?.toString() ?: "") }
     var reasoning by remember(route) { mutableStateOf(existing?.reasoning ?: "auto") }
@@ -705,7 +710,7 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
                 Column {
                     Text("Paste a provider block (TOML with [model_providers.NAME]).", color = A.dim, fontSize = 13.sp)
                     Spacer(Modifier.height(10.dp))
-                    Field("Config", text, { text = it }, singleLine = false, minLines = 6, mono = true)
+                    Field("Config", text, { text = it }, singleLine = false, minLines = 6, mono = true, tag = "import-config-text")
                     if (err.isNotBlank()) Text(err, color = A.danger, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
                 }
             },
@@ -718,7 +723,7 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
                         if (p.models.isNotEmpty()) { models = (p.models + models).distinct(); defaultModel = p.defaultModel }
                         importOpen = false
                     }
-                }) { Text("Import", color = A.accent) }
+                }, modifier = Modifier.testTag("import-config-go")) { Text("Import", color = A.accent) }
             },
             dismissButton = { TextButton({ importOpen = false }) { Text("Cancel", color = A.dim) } },
         )

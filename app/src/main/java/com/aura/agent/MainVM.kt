@@ -19,6 +19,8 @@ sealed interface Route {
     data object Chat : Route
     data object Settings : Route
     data object Memory : Route
+    data object Mcp : Route
+    data object McpBrowse : Route
     data class Provider(val id: String?, val preset: String? = null) : Route
 }
 
@@ -245,6 +247,40 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         store.upsertProvider(p)
         store.select(p.id, p.defaultModel)
         "${list.size} models connected"
+    }
+
+    // ---- free providers (no key) ----
+    suspend fun connectFree(id: String): Result<String> = runCatching {
+        val e = com.aura.agent.net.FreeCatalog.entry(id) ?: error("unknown provider")
+        val list = com.aura.agent.net.FreeCatalog.models(e)
+        val old = com.aura.agent.net.FreeCatalog.connected(e, store.providers.value)
+        val p = (old ?: Provider(id = Ids.id(), name = e.name, baseUrl = e.baseUrl, modelsUrl = e.modelsUrl))
+            .copy(models = list.models, blocked = list.blocked, defaultModel = list.models.first())
+        store.upsertProvider(p)
+        if (store.activeProvider.value != p.id) store.select(p.id, p.defaultModel)
+        "${list.models.size} free models connected"
+    }
+
+    fun disconnectFree(id: String) {
+        val e = com.aura.agent.net.FreeCatalog.entry(id) ?: return
+        com.aura.agent.net.FreeCatalog.connected(e, store.providers.value)?.let { store.deleteProvider(it.id) }
+    }
+
+    // ---- MCP ----
+    val extras get() = a.extras
+    val mcp get() = a.mcp
+
+    suspend fun connectMcp(s: com.aura.agent.net.McpServer): Result<Int> {
+        extras.upsertMcp(s.copy(enabled = true))
+        return mcp.connect(s.copy(enabled = true))
+    }
+    fun disconnectMcp(id: String) { extras.setMcpEnabled(id, false); mcp.disconnect(id) }
+    fun removeMcp(id: String) { extras.removeMcp(id); mcp.forget(id) }
+
+    // ---- phone folders ----
+    fun addFolder(uri: Uri): String {
+        runCatching { app.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
+        return extras.addFolder(com.aura.agent.agent.FolderAccess.displayName(uri), uri.toString()).name
     }
 
     suspend fun importSkill(url: String): Result<String> = runCatching {

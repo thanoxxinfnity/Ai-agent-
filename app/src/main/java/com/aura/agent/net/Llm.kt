@@ -47,6 +47,23 @@ object Llm {
     /** base of the exponential backoff for 429/5xx/network errors (tests make it tiny) */
     var backoffBaseMs = 3000L
 
+    /** Wire format learned at run time (chat vs responses), keyed by provider id + base url. Survives restarts through [onWireLearned]. */
+    private val learnedWire = java.util.concurrent.ConcurrentHashMap<String, String>()
+    var onWireLearned: (providerId: String, wire: String) -> Unit = { _, _ -> }
+    fun resetLearnedWire() = learnedWire.clear()
+    private fun wireKey(p: Provider) = p.id + "|" + p.baseUrl.trimEnd('/')
+
+    /** Does this error say the other API style is the one to use? (never triggered by auth or client restrictions) */
+    internal fun wantsOtherWire(usingResponses: Boolean, code: Int, body: String): Boolean {
+        val b = body.lowercase()
+        if ("client_not_allowed" in b || code == 401 || code == 429 || code in 500..599) return false
+        return if (!usingResponses) {
+            code == 404 || code == 405 || "chat_completions_disabled" in b || "/v1/responses" in b || "responses api" in b || "use the responses" in b || "use /responses" in b
+        } else {
+            code == 404 || code == 405 || ("/chat/completions" in b && (code == 400 || code == 403))
+        }
+    }
+
     private fun Request.Builder.auth(p: Provider): Request.Builder {
         if (p.apiKey.isNotBlank()) header("Authorization", "Bearer ${p.apiKey.trim()}")
         p.headers.forEach { (k, v) -> header(k, v) }
@@ -113,7 +130,8 @@ object Llm {
         effort: String? = null,
     ): List<ToolCall> = withContext(Dispatchers.IO) {
         ModelGuard.reason(p, model)?.let { throw LlmError(ModelGuard.warning(p, model, it), 400) }
-        val responses = p.wire == "responses"
+        var responses = (learnedWire[wireKey(p)] ?: p.wire) == "responses"
+        var flipped = false
         val effortKey = p.id + "|" + model
         var useEffort = effort != null && supportsEffort(p) && effortKey !in noEffort
         fun makeReq(): Request {
@@ -143,12 +161,18 @@ object Llm {
                             // this model or host does not take a reasoning level: remember it and ask again without
                             noEffort += effortKey; useEffort = false; req = makeReq(); waitMs = 0
                             null
+                        } else if (!flipped && wantsOtherWire(responses, code, errBody)) {
+                            // this server speaks the other API style: switch once and ask again right away
+                            flipped = true; responses = !responses; req = makeReq(); waitMs = 0
+                            null
                         } else if (code in RETRYABLE && attempt < maxRetries) {
                             waitMs = if (hinted != null) hinted * 1000 else backoffBaseMs shl attempt
                             attempt++
                             null
                         } else throw LlmError(friendly(code, errBody), code, hinted)
-                    } else readResponse(resp, responses, guarded)
+                    } else readResponse(resp, responses, guarded).also {
+                        if (flipped) { val w = if (responses) "responses" else "chat"; learnedWire[wireKey(p)] = w; onWireLearned(p.id, w) }
+                    }
                 }
             } catch (e: IOException) {
                 if (!job.isActive) throw kotlinx.coroutines.CancellationException("cancelled")

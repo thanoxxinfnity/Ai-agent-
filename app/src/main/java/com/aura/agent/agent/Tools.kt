@@ -26,7 +26,7 @@ object Tools {
         putJsonArray("required") { add("path"); add("content") }
     }
 
-    val defs: List<ToolDef> by lazy { (baseDefs + ToolsPro.defs + ToolsVercel.defs + ToolsMemory.defs + ToolsLive.defs).map(::relaxRepo) }
+    val defs: List<ToolDef> by lazy { (baseDefs + ToolsPro.defs + ToolsVercel.defs + ToolsMemory.defs + ToolsLive.defs + ToolsMcp.defs + ToolsFolders.defs).map(::relaxRepo) }
 
     /** `repo` stops being required: it defaults to the repository chosen when the chat started. */
     private fun relaxRepo(t: ToolDef): ToolDef {
@@ -59,12 +59,12 @@ object Tools {
         ),
         ToolDef(
             "cloud_exec",
-            "Run a shell command in the user's own GitHub Codespace (Linux, Node, Python, Java 17 installed). Use it for heavy work: builds, tests, installs, scripts. The codespace starts on first use and is stopped automatically when the task ends.",
+            "Run a bash command in the user's own GitHub Codespace, a real Linux terminal (Node, Python, Java 17, git, curl installed; you may install more with apt-get or pip). Use it for builds, tests, installs, scripts, servers, git and any shell work. Every call is a fresh shell (cd and exports do not persist), so pass cwd or chain with &&. Output streams live and the result shows the exit code. Run servers in the background with nohup ... &. The codespace starts on first use and is stopped automatically when the task ends.",
             schema(
                 listOf("command"),
                 "command" to prop("string", "Bash command"),
                 "timeout_seconds" to prop("number", "Max seconds, default 300"),
-                "cwd" to prop("string", "Working directory, default /workspaces/aura-workspace"),
+                "cwd" to prop("string", "Working directory, default is the active repository or /workspaces/aura-workspace"),
             ),
         ),
         ToolDef(
@@ -168,6 +168,9 @@ object Tools {
         if (name in ToolsVercel.NAMES) return ToolsVercel.run(ctx, name, a)
         if (name in ToolsMemory.NAMES) return ToolsMemory.run(ctx, name, a)
         if (name in ToolsLive.NAMES) return ToolsLive.run(ctx, name, a)
+        if (name in ToolsMcp.NAMES) return ToolsMcp.run(ctx, name, a)
+        if (name in ToolsFolders.NAMES) return ToolsFolders.run(ctx, name, a)
+        if (ctx.app.mcp.owns(name)) return ctx.app.mcp.call(ctx, name, a)
         if (name in CLOUD_TOOLS) return runCloud(name, a, ctx)
         val token = store.githubToken.value
         if (token.isBlank()) return "ERROR: No GitHub token. Ask the user to add one in Settings > GitHub."
@@ -250,6 +253,12 @@ object Tools {
                             return "DENIED: the user did not approve this command ($reason). Do not retry it; choose a safer approach or ask the user."
                         }
                     }
+                    if (Regex("""\bgit\s+push\b""").containsMatchIn(cmd)) {
+                        // look at what is about to leave the codespace; secrets block the push
+                        val diff = c.exec("cd ${Sh.q(cwd)} && git diff --no-color \$(git merge-base HEAD @{u} 2>/dev/null || git hash-object -t tree /dev/null)..HEAD 2>/dev/null | head -c 2000000", 60).stdout
+                        SecretScan.find(diff)?.let { return "BLOCKED: the commits to be pushed contain $it. Secrets are never pushed to GitHub. Remove it from the files and the commit history (git reset --soft, then recommit without it), then push again." }
+                        Regex("""(?m)^\+\+\+ b/(.+)$""").findAll(diff).map { it.groupValues[1] }.firstNotNullOfOrNull { SecretScan.blockedPath(it) }?.let { return "BLOCKED: $it. Secrets are never pushed to GitHub. Remove the file from the commit and add it to .gitignore." }
+                    }
                     if (Guard.mutates(cmd)) cp.recordCloud(ctx, c, cwd, "command: ${cmd.take(60)}")
                     ctx.emit("$ $cmd\n")
                     c.execStream(cmd, (a.n("timeout_seconds") ?: 300L).toInt().coerceIn(5, 1800), cwd, emptyMap(), ctx.emit).render()
@@ -299,9 +308,17 @@ object Tools {
         }.take(9000)
     }
 
+    internal suspend fun pushFiles(gh: GitHub, repo: String, a: JsonObject, ctx: ToolCtx): String = writeFiles(gh, repo, a, ctx)
+
     private suspend fun writeFiles(gh: GitHub, repo: String, a: JsonObject, ctx: ToolCtx): String {
         val files = a["files"] as? JsonArray ?: return "ERROR: files required"
         val deletes = (a["delete_paths"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+        // secrets never reach GitHub: refuse the whole push before anything is sent
+        for (f in files) {
+            val fo = f.o(); val p = fo.s("path").orEmpty()
+            SecretScan.blockedPath(p)?.let { return "BLOCKED: $it. Secrets are never pushed to GitHub. Nothing was pushed. Remove it, add it to .gitignore and commit a .env.example with empty values instead." }
+            if (fo.s("encoding") != "base64") SecretScan.checkOne(p, fo.s("content").orEmpty())?.let { return "$it Nothing was pushed." }
+        }
         // never accept abbreviated code
         for (f in files) {
             val fo = f.o()
@@ -402,6 +419,18 @@ object Tools {
         "save_memory" -> "Saving to memory"
         "search_memory" -> "Searching memory"
         "delete_memory" -> "Forgetting"
+        "mcp_list" -> "Checking MCP servers"
+        "mcp_search" -> "Searching the MCP registry"
+        "mcp_connect" -> "Connecting an MCP server"
+        "mcp_disconnect" -> "Disconnecting an MCP server"
+        "folder_list" -> "Looking in your phone folder"
+        "folder_read" -> "Reading a phone file"
+        "folder_write" -> "Writing to your phone folder"
+        "folder_edit" -> "Editing a phone file"
+        "folder_search" -> "Searching your phone folder"
+        "folder_delete" -> "Deleting from your phone folder"
+        "backup_repo_to_folder" -> "Backing up to your phone"
+        "push_folder_to_repo" -> "Uploading a folder to GitHub"
         "web_search" -> "Searching the web"
         "web_fetch" -> "Reading a web page"
         "generate_image" -> "Generating an image"

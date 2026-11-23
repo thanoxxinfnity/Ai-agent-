@@ -25,6 +25,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 class App : Application() {
     lateinit var db: AppDb
     lateinit var store: Store
+    lateinit var extras: com.aura.agent.data.Extras
+    lateinit var mcp: com.aura.agent.agent.McpHub
     lateinit var runner: AgentRunner
     lateinit var supabase: Supabase
     lateinit var voice: com.aura.agent.agent.Voice
@@ -46,7 +48,10 @@ class App : Application() {
         }
         db = Room.databaseBuilder(this, AppDb::class.java, "aura.db").addMigrations(AppDb.MIGRATION_1_2, AppDb.MIGRATION_2_3, AppDb.MIGRATION_3_4).fallbackToDestructiveMigration().build()
         store = Store(this)
+        extras = com.aura.agent.data.Extras(this)
+        mcp = com.aura.agent.agent.McpHub(extras)
         supabase = Supabase(store)
+        com.aura.agent.net.Llm.onWireLearned = { id, wire -> store.setWire(id, wire) }
         runner = AgentRunner(this)
         voice = com.aura.agent.agent.VoiceEngine(this, store, base = { geminiBase })
         appScope.launch { supabase.loadConfig() }

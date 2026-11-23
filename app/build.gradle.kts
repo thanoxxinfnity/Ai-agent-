@@ -49,7 +49,7 @@ android {
     }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
-    testOptions { unitTests { isIncludeAndroidResources = true; isReturnDefaultValues = true; all { it.setForkEvery(1) } } }
+    testOptions { unitTests { isIncludeAndroidResources = true; isReturnDefaultValues = true; all { it.setForkEvery(1); it.jvmArgs("--add-opens=java.base/java.io=ALL-UNNAMED") } } }
 }
 
 dependencies {
