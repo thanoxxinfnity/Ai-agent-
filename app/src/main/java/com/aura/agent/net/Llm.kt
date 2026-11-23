@@ -23,7 +23,7 @@ object Http {
     val JSON = "application/json".toMediaType()
 }
 
-class LlmError(msg: String) : Exception(msg)
+class LlmError(msg: String, val code: Int = 0, val retryAfterSec: Long? = null) : Exception(msg)
 
 data class ToolCall(val id: String, val name: String, val args: String)
 /** An image sent to a vision model, already downscaled. */
@@ -79,6 +79,8 @@ object Llm {
         msgs: List<LlmMsg>,
         tools: List<ToolDef>,
         onText: (String) -> Unit,
+        maxRetries: Int = 3,
+        onWait: suspend (Int) -> Unit = {},
     ): List<ToolCall> = withContext(Dispatchers.IO) {
         val responses = p.wire == "responses"
         val body = if (responses) responsesBody(model, system, msgs, tools) else chatBody(model, system, msgs, tools)
@@ -90,26 +92,38 @@ object Llm {
         var attempt = 0
         var result: List<ToolCall>? = null
         while (result == null) {
+            RateLimiter.acquire(p)   // spaces requests so one message cannot burst past the provider's limit
             val call = Http.client.newCall(req)
             val handle = job.invokeOnCompletion { if (it != null) call.cancel() }
             try {
+                var wait = -1L
                 result = call.execute().use { resp ->
                     if (!resp.isSuccessful) {
                         val code = resp.code
                         val errBody = resp.body?.string().orEmpty()
-                        if (code in RETRYABLE && attempt < 2) {
-                            val wait = (resp.header("Retry-After")?.toLongOrNull() ?: (2L shl attempt)).coerceIn(1, 20)
+                        val hinted = resp.header("Retry-After")?.toLongOrNull() ?: parseRetryDelay(errBody)
+                        if (code in RETRYABLE && attempt < maxRetries) {
+                            wait = (hinted ?: (3L shl attempt)).coerceIn(1, 90)
                             attempt++
-                            kotlinx.coroutines.delay(wait * 1000)
                             null
-                        } else throw LlmError(friendly(code, errBody))
+                        } else throw LlmError(friendly(code, errBody), code, hinted)
                     } else readResponse(resp, responses, onText)
+                }
+                if (wait > 0) {
+                    for (left in wait.toInt() downTo 1) { onWait(left); kotlinx.coroutines.delay(1000) }
                 }
             } finally {
                 handle.dispose()
             }
         }
         result
+    }
+
+    /** Seconds the provider asks us to wait ("retry in 17.2s", "retryDelay":"17s"). */
+    fun parseRetryDelay(body: String): Long? {
+        Regex("retry in ([0-9.]+)\\s*s", RegexOption.IGNORE_CASE).find(body)?.let { return Math.ceil(it.groupValues[1].toDouble()).toLong() }
+        Regex("\"retryDelay\"\\s*:\\s*\"([0-9.]+)s\"").find(body)?.let { return Math.ceil(it.groupValues[1].toDouble()).toLong() }
+        return null
     }
 
     private val RETRYABLE = setOf(408, 429, 500, 502, 503, 504)

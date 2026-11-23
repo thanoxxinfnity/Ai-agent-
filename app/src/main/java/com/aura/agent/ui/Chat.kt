@@ -130,8 +130,11 @@ fun ChatHost(vm: MainVM) {
     val pickImages = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetMultipleContents()) { vm.attach(it) }
     val pickFiles = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetMultipleContents()) { vm.attach(it) }
     val chat = chats.firstOrNull { it.id == currentId }
-    val current = vm.store.current()
-    val modelLabel = current?.second ?: "Choose model"
+    val auto by vm.store.autoMode.collectAsState()
+    // keyed on the store values so the chip updates as soon as a provider or model changes
+    val current = remember(providers, activeProvider, activeModel) { vm.store.current() }
+    val hasModel = remember(providers, activeProvider, activeModel, auto) { current != null || (auto && vm.store.candidates().isNotEmpty()) }
+    val modelLabel = if (auto) "Auto" else current?.second ?: "Choose model"
 
     BackHandler0(drawer.isOpen) { scope.launch { drawer.close() } }
 
@@ -162,7 +165,7 @@ fun ChatHost(vm: MainVM) {
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (messages.isEmpty()) {
-                    EmptyState(hasModel = current != null, onSuggest = { input = it }, onSetup = { vm.go(Route.Settings) })
+                    EmptyState(hasModel = hasModel, onSuggest = { input = it }, onSetup = { vm.go(Route.Settings) })
                 } else {
                     MessageList(messages, vm)
                 }
@@ -202,7 +205,8 @@ fun ChatHost(vm: MainVM) {
 
     if (repoPicker) RepoPicker(vm) { repoPicker = false }
     if (picker) ModelPicker(
-        providers = providers, activeProvider = activeProvider, activeModel = activeModel,
+        providers = providers, activeProvider = activeProvider, activeModel = activeModel, auto = auto,
+        onAuto = { vm.store.setAuto(true); picker = false },
         onPick = { p, m -> vm.store.select(p, m); picker = false },
         onDismiss = { picker = false }, onSetup = { picker = false; vm.go(Route.Settings) },
     )
@@ -260,6 +264,7 @@ private fun MessageItem(m: MessageEntity, live: State<Map<String, String>>, rest
             if (m.isError) ErrorRow(text) else AssistantText(text, showActions = streaming == null, restoreCount = restoreCount, onRestore = onRestore)
         }
         "note" -> {}
+        "switch" -> Text(m.content, color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp))
         "summary" -> SummaryRow(m.content)
         else -> ToolStep(m, live)
     }
@@ -748,7 +753,7 @@ private fun DrawerContent(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ModelPicker(
-    providers: List<com.aura.agent.data.Provider>, activeProvider: String, activeModel: String,
+    providers: List<com.aura.agent.data.Provider>, activeProvider: String, activeModel: String, auto: Boolean, onAuto: () -> Unit,
     onPick: (String, String) -> Unit, onDismiss: () -> Unit, onSetup: () -> Unit,
 ) {
     var q by remember { mutableStateOf("") }
@@ -778,6 +783,21 @@ private fun ModelPicker(
                 }
             }
             LazyColumn(Modifier.weight(1f)) {
+                item(key = "auto") {
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 6.dp).clip(RoundedCornerShape(14.dp)).background(if (auto) A.bubble else androidx.compose.ui.graphics.Color.Transparent)
+                            .border(1.dp, A.border, RoundedCornerShape(14.dp)).clickable(onClick = onAuto).padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AIcon(R.drawable.ic_bolt, tint = A.accent, size = 20.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Auto", color = A.text, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                            Text("Switches to another provider when one is busy or rate limited. Only active while selected.", color = A.dim, fontSize = 12.sp, lineHeight = 17.sp)
+                        }
+                        if (auto) AIcon(R.drawable.ic_check, tint = A.accent, size = 20.dp)
+                    }
+                }
                 providers.forEach { p ->
                     val models = (p.models + p.defaultModel).filter { it.isNotBlank() }.distinct().filter { q.isBlank() || it.contains(q, true) }
                     if (models.isNotEmpty()) {
@@ -785,7 +805,7 @@ private fun ModelPicker(
                             Text(p.name.uppercase(), color = A.dim, fontSize = 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 14.dp, bottom = 4.dp, start = 4.dp))
                         }
                         items(models, key = { "${p.id}/$it" }) { m ->
-                            val sel = p.id == activeProvider && m == activeModel
+                            val sel = !auto && p.id == activeProvider && m == activeModel
                             Row(
                                 Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(if (sel) A.bubble else androidx.compose.ui.graphics.Color.Transparent)
                                     .clickable { onPick(p.id, m) }.padding(horizontal = 12.dp, vertical = 13.dp),

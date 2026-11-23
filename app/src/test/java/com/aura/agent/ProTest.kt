@@ -26,6 +26,8 @@ class Mock {
     val bodies = CopyOnWriteArrayList<Pair<String, String>>()
     val script = ConcurrentLinkedQueue<MockResponse>()
     val mainRequests = CopyOnWriteArrayList<String>()
+    val altRequests = CopyOnWriteArrayList<String>()
+    val scriptB = ConcurrentLinkedQueue<MockResponse>()
     val verifyResults = ConcurrentLinkedQueue<String>()
     var fileText = "x = 1\ny = 2\n"
     var mainFallback: () -> MockResponse = { text("ok") }
@@ -48,6 +50,7 @@ class Mock {
                 log += r.method + " " + p
                 bodies += (r.method + " " + p) to body
                 return when {
+                    p.startsWith("/v2/chat/completions") -> if (body.contains("You write chat titles")) text("Title from provider B here") else { altRequests += body; scriptB.poll() ?: text("from B") }
                     p.startsWith("/v1/responses") -> { mainRequests += body; MockResponse().setHeader("Content-Type", "text/event-stream").setBody("data: {\"type\":\"response.output_text.delta\",\"delta\":\"responses ok\"}\n\ndata: {\"type\":\"response.completed\"}\n\n") }
                     p.startsWith("/gh/repos/octo/r/contents/uploads/") || p.startsWith("/gh/repos/octo/r/contents/data.bin") -> if (r.method == "GET") json("{}", 404) else json("{}", 201)
                     p.startsWith("/v1/chat/completions") -> when {

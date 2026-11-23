@@ -81,7 +81,7 @@ object ToolsPro {
         ),
         ToolDef(
             "delegate",
-            "Hand research to read-only worker sub-agents that run in parallel (max 4) and return only a concise summary, which keeps your own context small. Give each worker one focused question, for example 'find where login is implemented and list the functions involved'.",
+            "Hand research to read-only worker sub-agents that run in parallel (max 3) and return only a concise summary, which keeps your own context small. Give each worker one focused question, for example 'find where login is implemented and list the functions involved'.",
             schema(listOf("tasks"), "tasks" to buildJsonObject { put("type", "array"); putJsonObject("items") { put("type", "string") }; put("description", "One task per worker") }),
         ),
     )

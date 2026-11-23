@@ -464,12 +464,14 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
     var error by remember(route) { mutableStateOf("") }
     var importOpen by remember { mutableStateOf(false) }
     var manual by remember(route) { mutableStateOf("") }
+    var rpm by remember(route) { mutableStateOf(existing?.rpm?.takeIf { it > 0 }?.toString() ?: "") }
 
     fun build() = Provider(
         id = existing?.id ?: Ids.id(), name = name.trim(), baseUrl = baseUrl.trim().trimEnd('/'), apiKey = apiKey.trim(), wire = wire,
         modelsUrl = modelsUrl.trim(),
         headers = headers.lines().mapNotNull { l -> l.split(":", limit = 2).takeIf { it.size == 2 && it[0].isNotBlank() }?.let { it[0].trim() to it[1].trim() } }.toMap(),
         models = models, defaultModel = defaultModel.ifBlank { models.firstOrNull().orEmpty() },
+        rpm = rpm.toIntOrNull()?.coerceIn(0, 100000) ?: 0,
     )
     val built = remember { mutableStateOf<Provider?>(null) }
 
@@ -490,6 +492,7 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
                 }
             }
             item { Field("Models URL (optional)", modelsUrl, { modelsUrl = it }, placeholder = "defaults to base URL + /models") }
+            item { Field("Requests per minute limit (optional)", rpm, { rpm = it.filter { c -> c.isDigit() }.take(5) }, placeholder = "empty = automatic (Gemini 10, NVIDIA 30)") }
             item { Field("Extra headers (one per line)", headers, { headers = it }, singleLine = false, minLines = 2, mono = true, placeholder = "x-header: value") }
             item {
                 Column {

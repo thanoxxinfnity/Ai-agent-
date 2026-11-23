@@ -289,8 +289,6 @@ class AgentRunner(private val app: App) {
     }
 
     private suspend fun generate(chatId: String, onId: (String) -> Unit): List<ToolCall> {
-        val (provider, model) = store.current()
-            ?: throw LlmError("No model selected. Open Settings, add a provider and pick a model.")
         status.value = "Thinking"
         val llm = toLlm(dao.messagesOnce(chatId))
         val id = Ids.id()
@@ -300,7 +298,13 @@ class AgentRunner(private val app: App) {
         val sb = StringBuilder()
         var lastEmit = 0L
         val calls = try {
-            Llm.stream(provider, model, systemPrompt(dao.chat(chatId)?.repo.orEmpty()), llm, Tools.defs) { chunk ->
+            LlmRouter.stream(
+                store, systemPrompt(dao.chat(chatId)?.repo.orEmpty()), llm, Tools.defs,
+                LlmRouter.Hooks(
+                    onSwitch = { msg -> dao.upsertMessage(MessageEntity(Ids.id(), chatId, "switch", msg, placeholder.createdAt - 1)) },
+                    onWait = { sec -> status.value = "Rate limited, retrying in ${sec}s" },
+                ),
+            ) { chunk ->
                 sb.append(chunk)
                 val now = System.currentTimeMillis()
                 if (now - lastEmit > 40) { lastEmit = now; live.update { it + (id to sb.toString()) } }
@@ -327,7 +331,7 @@ class AgentRunner(private val app: App) {
 
     /** When the history reaches ~75% of the context window, older turns are folded into one summary message. */
     suspend fun maybeCompact(chatId: String, force: Boolean) {
-        val (provider, model) = store.current() ?: return
+        if (store.current() == null && !(store.autoMode.value && store.candidates().isNotEmpty())) return
         val active = dao.messagesOnce(chatId).filter { !it.compacted }
         val limit = store.contextTokens.value
         if (!force && Tokens.estimate(contextChars(active)) < limit * 0.75) return
@@ -335,7 +339,7 @@ class AgentRunner(private val app: App) {
         if (cut <= 0) return
         val old = active.subList(0, cut)
         status.value = "Compacting context"
-        val transcript = old.joinToString("\n") {
+        val transcript = old.filter { it.role != "switch" }.joinToString("\n") {
             when (it.role) {
                 "user" -> "USER: ${it.content.take(1500)}"
                 "assistant" -> "ASSISTANT: ${it.content.take(1500)}" + (parseCalls(it.toolCalls).takeIf { c -> c.isNotEmpty() }?.joinToString(prefix = " [called ", postfix = "]") { c -> "${c.name} ${c.args.take(160)}" } ?: "")
@@ -347,8 +351,8 @@ class AgentRunner(private val app: App) {
         val summary = runCatching {
             val sb = StringBuilder()
             withTimeout(90_000) {
-                Llm.stream(
-                    provider, model, "You write precise technical summaries of an AI agent's work.",
+                LlmRouter.stream(
+                    store, "You write precise technical summaries of an AI agent's work.",
                     listOf(LlmMsg("user", COMPACT_PROMPT + "\n\n" + transcript)), emptyList(),
                 ) { sb.append(it) }
             }
@@ -370,7 +374,7 @@ class AgentRunner(private val app: App) {
     private fun toLlm(history: List<MessageEntity>): List<LlmMsg> {
         val active = history.filter { !it.compacted }
         val summary = active.lastOrNull { it.role == "summary" }
-        val body = active.filter { it.role != "summary" }.takeLast(HISTORY_LIMIT).dropWhile { it.role == "tool" }
+        val body = active.filter { it.role != "summary" && it.role != "switch" }.takeLast(HISTORY_LIMIT).dropWhile { it.role == "tool" }
         val recent = body.size - 10
         val recentUsers = body.indices.filter { body[it].role == "user" }.takeLast(3).toSet()
         val out = ArrayList<LlmMsg>()
@@ -408,7 +412,7 @@ class AgentRunner(private val app: App) {
     }
 
     private suspend fun makeTitle(chatId: String) {
-        val (provider, model) = store.current() ?: return
+        if (store.current() == null && !(store.autoMode.value && store.candidates().isNotEmpty())) return
         val msgs = dao.messagesOnce(chatId)
         val firstUser = msgs.firstOrNull { it.role == "user" }?.content.orEmpty()
         val firstReply = msgs.firstOrNull { it.role == "assistant" && it.content.isNotBlank() }?.content.orEmpty()
@@ -418,7 +422,7 @@ class AgentRunner(private val app: App) {
             "User: ${firstUser.take(400)}\nAssistant: ${firstReply.take(400)}"
         val raw = runCatching {
             val sb = StringBuilder()
-            withTimeout(45_000) { Llm.stream(provider, model, "You write chat titles.", listOf(LlmMsg("user", prompt)), emptyList()) { sb.append(it) } }
+            withTimeout(45_000) { LlmRouter.stream(store, "You write chat titles.", listOf(LlmMsg("user", prompt)), emptyList()) { sb.append(it) } }
             sb.toString()
         }.getOrDefault("")
         val title = clampTitle(raw).ifBlank { clampTitle(firstUser) }.ifBlank { "Quick chat with Aura" }

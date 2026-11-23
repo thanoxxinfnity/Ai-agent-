@@ -24,6 +24,8 @@ data class Provider(
     val headers: Map<String, String> = emptyMap(),
     val models: List<String> = emptyList(),
     val defaultModel: String = "",
+    /** requests per minute this provider allows; 0 = Aura's built-in default for known hosts */
+    val rpm: Int = 0,
 )
 
 val AppJson = Json { ignoreUnknownKeys = true; encodeDefaults = true; isLenient = true }
@@ -150,7 +152,24 @@ class Store(ctx: Context) {
         if (_activeProvider.value == id) select("", "")
     }
 
+    private val _autoMode = MutableStateFlow(prefs.getBoolean("autoMode", false))
+    /** Opt-in: when the user picks Auto, a busy or limited provider is skipped and the next one is used. */
+    val autoMode = _autoMode.asStateFlow()
+    fun setAuto(on: Boolean) { _autoMode.value = on; prefs.edit().putBoolean("autoMode", on).apply() }
+
+    /** Auto mode order: the current choice first, then each other provider's default model. */
+    fun candidates(): List<Pair<Provider, String>> {
+        val out = ArrayList<Pair<Provider, String>>()
+        current()?.let { out += it }
+        for (p in _providers.value) {
+            val m = p.defaultModel.ifBlank { p.models.firstOrNull().orEmpty() }
+            if (m.isNotBlank() && out.none { it.first.id == p.id }) out += p to m
+        }
+        return out
+    }
+
     fun select(providerId: String, model: String) {
+        setAuto(false)
         _activeProvider.value = providerId; _activeModel.value = model
         prefs.edit().putString("activeProvider", providerId).putString("activeModel", model).apply()
     }

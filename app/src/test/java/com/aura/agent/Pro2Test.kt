@@ -285,6 +285,8 @@ class RepoPickerUiTest : UiBase() {
         rule.waitForIdle()
         assertTrue("chip", text("Choose repository"))
         rule.onNodeWithText("Choose repository").performClick()
+        val until = System.currentTimeMillis() + 10000
+        while (System.currentTimeMillis() < until && !text("octo/alpha")) Thread.sleep(100)
         assertTrue("repo list", text("octo/alpha") && text("first"))
         rule.onNodeWithText("octo/alpha").performClick()
         assertEquals("octo/alpha", vm().pendingRepo.value)
