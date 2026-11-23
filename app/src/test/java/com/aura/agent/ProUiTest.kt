@@ -97,7 +97,7 @@ class MigrationTest {
         raw.version = 1
         raw.close()
         // strict: no destructive fallback, so a schema mismatch would crash here exactly as it would for users
-        val db = Room.databaseBuilder(ctx, AppDb::class.java, "migrate-test.db").addMigrations(AppDb.MIGRATION_1_2, AppDb.MIGRATION_2_3, AppDb.MIGRATION_3_4).allowMainThreadQueries().build()
+        val db = Room.databaseBuilder(ctx, AppDb::class.java, "migrate-test.db").addMigrations(AppDb.MIGRATION_1_2, AppDb.MIGRATION_2_3, AppDb.MIGRATION_3_4, AppDb.MIGRATION_4_5).allowMainThreadQueries().build()
         val dao = db.dao()
         val msgs = runBlocking { dao.messagesOnce("old1") }
         assertEquals("hello from v1", msgs.single().content)
@@ -116,6 +116,10 @@ class MigrationTest {
         assertEquals("dark mode", runBlocking { dao.memory("pref") }!!.value)
         assertEquals(1, runBlocking { dao.memoryCount() })
         assertEquals("hello from v1", runBlocking { dao.messagesOnce("old1") }.single().content)
+        // v5: several repositories per chat, empty for old chats
+        assertEquals("", runBlocking { dao.chat("old1") }!!.extraRepos)
+        runBlocking { dao.setRepos("old1", "octo/a", "octo/b,octo/c") }
+        assertEquals(listOf("octo/a", "octo/b", "octo/c"), runBlocking { dao.chat("old1") }!!.allRepos())
         db.close()
     }
 }

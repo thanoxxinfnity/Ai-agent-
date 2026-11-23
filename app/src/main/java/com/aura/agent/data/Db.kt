@@ -28,7 +28,12 @@ data class ChatEntity(
     /** owner/name chosen when the chat started (empty = none). Fixed for the life of the chat. */
     @ColumnInfo(defaultValue = "''") val repo: String = "",
     @ColumnInfo(defaultValue = "''") val branch: String = "",
-)
+    /** more repositories attached to this chat (comma separated owner/name), besides [repo] */
+    @ColumnInfo(defaultValue = "''") val extraRepos: String = "",
+) {
+    /** every repository attached to the chat, the main one first */
+    fun allRepos(): List<String> = (listOf(repo) + extraRepos.split(",")).map { it.trim() }.filter { it.isNotBlank() }.distinct()
+}
 
 @Entity(tableName = "messages", indices = [Index("chatId")])
 data class MessageEntity(
@@ -107,6 +112,9 @@ interface ChatDao {
     @Query("UPDATE chats SET updatedAt = :t WHERE id = :id")
     suspend fun touch(id: String, t: Long)
 
+    @Query("UPDATE chats SET repo = :repo, extraRepos = :extra WHERE id = :id")
+    suspend fun setRepos(id: String, repo: String, extra: String)
+
     @Query("DELETE FROM messages WHERE id = :id")
     suspend fun deleteMessage(id: String)
 
@@ -156,11 +164,17 @@ interface ChatDao {
     suspend fun deleteMemory(key: String): Int
 }
 
-@Database(entities = [ChatEntity::class, MessageEntity::class, CheckpointEntity::class, MemoryEntity::class], version = 4, exportSchema = false)
+@Database(entities = [ChatEntity::class, MessageEntity::class, CheckpointEntity::class, MemoryEntity::class], version = 5, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): ChatDao
 
     companion object {
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chats ADD COLUMN extraRepos TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS memories (`key` TEXT NOT NULL, value TEXT NOT NULL, category TEXT NOT NULL, updatedAt INTEGER NOT NULL, PRIMARY KEY(`key`))")

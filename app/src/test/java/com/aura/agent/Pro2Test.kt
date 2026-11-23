@@ -129,7 +129,7 @@ class AttachmentsAndReposTest {
         val m = Mock().start(); val app = setup(m)
         m.script += m.text("hi")
         run(app, "hello")
-        assertTrue(m.mainRequests.last().contains("No repository was chosen for this chat"))
+        assertTrue(m.mainRequests.last().contains("No repository is attached to this chat"))
     }
 
     @Test fun cloud_clone_tool_clones_any_repo() {

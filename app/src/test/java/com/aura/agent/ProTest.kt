@@ -38,6 +38,9 @@ class Mock {
     val ghFirst = ConcurrentLinkedQueue<MockResponse>()
     @Volatile var gitDiff = ""
     @Volatile var titleReply: String? = null
+    /** "none": no releases, "pre": only pre-releases (as the CI builds are), "full": a normal release; tag lookups answer with it too */
+    @Volatile var releases = "pre"
+    val apkBytes = byteArrayOf(80, 75, 3, 4, 20, 0, 1, 2, 3, 4, 5, 6)
     val altRequests = CopyOnWriteArrayList<String>()
     val scriptB = ConcurrentLinkedQueue<MockResponse>()
     val verifyResults = ConcurrentLinkedQueue<String>()
@@ -82,6 +85,10 @@ class Mock {
                         body.contains("You write chat titles") -> text(titleReply ?: "A casual chat title for tests")
                         else -> { mainRequests += body; script.poll() ?: mainFallback() }
                     }
+                    p == "/gh/repos/octo/r/releases/latest" -> if (releases == "full") json(relJson(false)) else json("{\"message\":\"Not Found\"}", 404)
+                    p.startsWith("/gh/repos/octo/r/releases/tags/") -> if (releases == "none") json("{\"message\":\"Not Found\"}", 404) else json(relJson(releases == "pre"))
+                    p == "/gh/repos/octo/r/releases/assets/77" -> MockResponse().setHeader("Content-Type", "application/octet-stream").setBody(okio.Buffer().write(apkBytes))
+                    p.startsWith("/gh/repos/octo/r/releases?") -> if (releases == "none") json("[]") else json("[{\"tag_name\":\"draft-1\",\"draft\":true,\"assets\":[]}," + relJson(releases == "pre") + "]")
                     p == "/gh/user" -> json("{\"login\":\"octo\"}").setHeader("X-OAuth-Scopes", "codespace, repo")
                     p == "/gh/repos/octo/r" -> json("{\"default_branch\":\"main\"}")
                     p.startsWith("/gh/repos/octo/r/actions/runs/") -> json("{\"status\":\"completed\",\"conclusion\":\"failure\",\"html_url\":\"https://github.com/octo/r/actions/runs/1\"}")
@@ -129,6 +136,8 @@ class Mock {
         server.start()
         return this
     }
+
+    fun relJson(pre: Boolean) = "{\"tag_name\":\"build-7\",\"html_url\":\"https://github.com/octo/r/releases/tag/build-7\",\"draft\":false,\"prerelease\":$pre,\"assets\":[{\"id\":76,\"name\":\"notes.txt\",\"browser_download_url\":\"https://github.com/octo/r/releases/download/build-7/notes.txt\"},{\"id\":77,\"name\":\"app-release.apk\",\"browser_download_url\":\"https://github.com/octo/r/releases/download/build-7/app-release.apk\"}]}"
 
     fun count(prefix: String) = log.count { it.startsWith(prefix) }
 }

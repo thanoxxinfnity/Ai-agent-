@@ -25,6 +25,12 @@ class RunState {
     fun markModified() { modified = true; verified = false }
 }
 
+/** What the model asks for in the secure key box. */
+class SecretAsk(val name: String, val baseUrl: String, val style: String, val param: String, val reason: String)
+
+/** What the user entered. The key stays inside the app. */
+class SecretReply(val name: String, val baseUrl: String, val key: String, val style: String, val param: String)
+
 /** Everything a tool needs for one call. */
 class ToolCtx(
     val app: App,
@@ -38,11 +44,15 @@ class ToolCtx(
     val emit: (String) -> Unit = {},
     /** asks the user; returns true when approved */
     val approve: suspend (title: String, detail: String) -> Boolean = { _, _ -> true },
+    /** shows the secure key box and returns what the user typed (null when they decline); the model never receives the key itself */
+    val askSecret: suspend (SecretAsk) -> SecretReply? = { null },
     /** read-only worker sub-agents may not modify anything or ask the user */
     val readOnly: Boolean = false,
     val subAgents: (suspend (List<String>) -> String)? = null,
     /** owner/name chosen when the chat started; tools use it when no repo is given */
     val activeRepo: String = "",
+    /** other repositories attached to the chat */
+    val extraRepos: List<String> = emptyList(),
     val mode: ThinkMode = ThinkMode.STEADY,
 ) {
     /** files this call created (generated images, downloads); they appear on the tool step in the chat */

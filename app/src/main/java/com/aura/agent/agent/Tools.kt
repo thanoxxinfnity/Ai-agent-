@@ -226,9 +226,9 @@ object Tools {
                 "github_wait_run" -> waitRun(gh, full(a.s("repo")!!), a.n("run_id") ?: return "ERROR: run_id required", ctx)
                 "github_run_logs" -> runLogs(gh, full(a.s("repo")!!), a.n("run_id") ?: return "ERROR: run_id required")
                 "github_latest_release" -> {
-                    val r = gh.call("GET", "/repos/${full(a.s("repo")!!)}/releases/latest").o()
+                    val r = ToolsFiles.findRelease(gh, full(a.s("repo")!!), a.s("tag")) ?: return "ERROR: this repository has no release yet. Run the build workflow first, then check again."
                     val assets = (r["assets"] as JsonArray).joinToString("\n") { "- ${it.s("name")}: ${it.s("browser_download_url")}" }
-                    "Release ${r.s("tag_name")} ${r.s("html_url")}\n$assets"
+                    "Release ${r.s("tag_name")}${if (r["prerelease"]?.jsonPrimitive?.booleanOrNull == true) " (pre-release)" else ""} ${r.s("html_url")}\n$assets\nShare these links so other people can download the app; send_release_apk gives the user the APK file itself inside Aura."
                 }
                 else -> "ERROR: unknown tool $name"
             }
@@ -424,6 +424,9 @@ object Tools {
         "search_memory" -> "Searching memory"
         "delete_memory" -> "Forgetting"
         "send_file" -> "Preparing a file for you"
+        "send_release_apk" -> "Getting the APK for you"
+        "request_api_key" -> "Asking you for an API key"
+        "api_configure" -> "Setting up a stored key"
         "api_list" -> "Checking stored API keys"
         "api_request" -> "Calling an API"
         "mcp_list" -> "Checking MCP servers"
@@ -436,6 +439,8 @@ object Tools {
         "folder_edit" -> "Editing a phone file"
         "folder_search" -> "Searching your phone folder"
         "folder_delete" -> "Deleting from your phone folder"
+        "folder_copy" -> "Copying between phone folders"
+        "folder_zip" -> "Packing a ZIP for you"
         "backup_repo_to_folder" -> "Backing up to your phone"
         "push_folder_to_repo" -> "Uploading a folder to GitHub"
         "web_search" -> "Searching the web"

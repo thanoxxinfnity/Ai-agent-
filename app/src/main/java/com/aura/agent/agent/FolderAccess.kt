@@ -130,8 +130,17 @@ class FileBackend(private val root: File) : FolderBackend {
     override fun delete(path: String): Boolean { val f = resolve(path); return f != root && f.exists() && f.deleteRecursively() }
 }
 
+/** The built-in phone workspace: a private folder inside Aura that is always there, so work can stay on the phone without picking a folder first. */
+object Workspace {
+    const val NAME = "workspace"
+    const val URI = "aura://workspace"
+    val folder = LocalFolder("workspace", NAME, URI, true)
+    fun dir(ctx: Context): File = File(ctx.filesDir, "workspace").also { it.mkdirs() }
+}
+
 object FolderAccess {
     fun open(ctx: Context, folder: LocalFolder): FolderBackend {
+        if (folder.uri == Workspace.URI) return FileBackend(Workspace.dir(ctx))
         val uri = Uri.parse(folder.uri)
         return if (uri.scheme == "file") FileBackend(File(requireNotNull(uri.path))) else SafBackend(ctx, uri)
     }

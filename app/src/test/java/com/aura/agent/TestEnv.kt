@@ -40,10 +40,10 @@ object Env {
         return app
     }
 
-    fun run(app: App, text: String = "hello", repo: String = "", seed: List<MessageEntity> = emptyList(), attachments: String? = null, during: (() -> Unit)? = null): Res {
+    fun run(app: App, text: String = "hello", repo: String = "", seed: List<MessageEntity> = emptyList(), attachments: String? = null, during: (() -> Unit)? = null, extraRepos: String = ""): Res {
         val dao = app.db.dao(); val chat = Ids.id(); val turn = Ids.id()
         runBlocking {
-            dao.upsertChat(ChatEntity(chat, "New chat", Ids.now(), Ids.now(), repo = repo))
+            dao.upsertChat(ChatEntity(chat, "New chat", Ids.now(), Ids.now(), repo = repo, extraRepos = extraRepos))
             seed.forEach { dao.upsertMessage(it.copy(chatId = chat)) }
             dao.upsertMessage(MessageEntity(turn, chat, "user", text, Ids.now(), attachments = attachments))
         }

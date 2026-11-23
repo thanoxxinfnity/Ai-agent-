@@ -40,7 +40,7 @@ class FolderToolsTest {
         app.extras.setFolderEnabled(app.extras.folders.value.single().id, false)
         assertTrue(run("folder_list", "{}").contains("disconnected by the user"))
         app.extras.folders.value.forEach { app.extras.removeFolder(it.id) }
-        assertTrue(run("folder_list", "{}").contains("No phone folder is connected"))
+        assertTrue(run("folder_list", "{}").let { it.contains("workspace") && it.contains("No other phone folder is connected") })
     }
 
     @Test fun write_read_edit_search_list_and_delete_work_end_to_end() {

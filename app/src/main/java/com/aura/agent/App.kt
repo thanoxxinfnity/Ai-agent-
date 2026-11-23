@@ -46,7 +46,7 @@ class App : Application() {
             }
             prev?.uncaughtException(t, e)
         }
-        db = Room.databaseBuilder(this, AppDb::class.java, "aura.db").addMigrations(AppDb.MIGRATION_1_2, AppDb.MIGRATION_2_3, AppDb.MIGRATION_3_4).fallbackToDestructiveMigration().build()
+        db = Room.databaseBuilder(this, AppDb::class.java, "aura.db").addMigrations(AppDb.MIGRATION_1_2, AppDb.MIGRATION_2_3, AppDb.MIGRATION_3_4, AppDb.MIGRATION_4_5).fallbackToDestructiveMigration().build()
         store = Store(this)
         extras = com.aura.agent.data.Extras(this)
         mcp = com.aura.agent.agent.McpHub(extras)

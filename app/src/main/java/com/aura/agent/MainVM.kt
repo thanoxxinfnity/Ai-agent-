@@ -72,6 +72,8 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     // ---- repository chosen when a chat starts
     data class RepoInfo(val full: String, val private: Boolean, val description: String)
     val pendingRepo = MutableStateFlow(store.defaultRepo())
+    /** more repositories chosen before the first message of a new chat */
+    val pendingExtra = MutableStateFlow<List<String>>(emptyList())
     val repos = MutableStateFlow<List<RepoInfo>>(emptyList())
     val reposState = MutableStateFlow("")   // "", "loading", or an error message
 
@@ -103,7 +105,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    suspend fun createRepo(name: String, description: String, private: Boolean): Result<String> = runCatching {
+    suspend fun createRepo(name: String, description: String, private: Boolean, select: Boolean = true): Result<String> = runCatching {
         val token = store.githubToken.value
         require(token.isNotBlank()) { "Sign in with GitHub first." }
         val r = GitHub(token, a.cloudApi).call("POST", "/user/repos", kotlinx.serialization.json.buildJsonObject {
@@ -111,22 +113,76 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         }) as kotlinx.serialization.json.JsonObject
         val full = (r["full_name"] as kotlinx.serialization.json.JsonPrimitive).content
         repos.value = listOf(RepoInfo(full, private, description)) + repos.value
-        pendingRepo.value = full
+        if (select) pendingRepo.value = full
         full
     }
 
-    fun openChat(id: String?) { currentId.value = id; pendingRepo.value = if (id == null) store.defaultRepo() else ""; route.value = Route.Chat }
+    fun openChat(id: String?) { currentId.value = id; pendingRepo.value = if (id == null) store.defaultRepo() else ""; pendingExtra.value = emptyList(); route.value = Route.Chat }
+
+    /** Every repository attached to the chat on screen (or being prepared), the main one first. */
+    fun repoList(chat: ChatEntity?): List<String> =
+        if (chat != null) chat.allRepos() else (listOf(pendingRepo.value) + pendingExtra.value).filter { it.isNotBlank() }.distinct()
+
+    /** Adds a repository to this chat, before or after the first message. The first one becomes the main repository. */
+    fun attachRepo(full: String) {
+        val id = currentId.value
+        if (id == null) {
+            if (pendingRepo.value.isBlank()) pendingRepo.value = full
+            else if (full != pendingRepo.value && full !in pendingExtra.value) pendingExtra.value = pendingExtra.value + full
+            store.lastRepo = full
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val c = dao.chat(id) ?: return@launch
+            val all = c.allRepos()
+            if (full in all) return@launch
+            val next = all + full
+            dao.setRepos(id, next.first(), next.drop(1).joinToString(","))
+            store.lastRepo = full
+        }
+    }
+
+    fun detachRepo(full: String) {
+        val id = currentId.value
+        if (id == null) {
+            val all = (listOf(pendingRepo.value) + pendingExtra.value).filter { it.isNotBlank() && it != full }
+            pendingRepo.value = all.firstOrNull().orEmpty(); pendingExtra.value = all.drop(1)
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val c = dao.chat(id) ?: return@launch
+            val rest = c.allRepos().filter { it != full }
+            dao.setRepos(id, rest.firstOrNull().orEmpty(), rest.drop(1).joinToString(","))
+        }
+    }
     fun go(r: Route) { route.value = r }
 
+    /** A short message above the message box, for example "key saved". */
+    val notice = MutableStateFlow("")
+
     fun send(text: String) {
-        val t = text.trim()
+        val t0 = text.trim()
         val atts = pending.value
-        if (t.isEmpty() && atts.isEmpty()) return
+        if (t0.isEmpty() && atts.isEmpty()) return
         viewModelScope.launch(Dispatchers.IO) {
+            // keys pasted into the message or into an attached text file go into the hidden key box and never reach the model or the history
+            val cap = com.aura.agent.agent.SecretCapture.capture(t0, a.extras)
+            val savedNames = ArrayList(cap.saved); var removedBlocks = cap.removed
+            for (att in atts.filter { it.kind == "text" }) {
+                val f = java.io.File(att.path)
+                val txt = runCatching { f.readText() }.getOrNull() ?: continue
+                val r = com.aura.agent.agent.SecretCapture.capture(txt, a.extras)
+                if (r.saved.isNotEmpty() || r.removed > 0) { runCatching { f.writeText(r.text) }; savedNames += r.saved; removedBlocks += r.removed }
+            }
+            if (savedNames.isNotEmpty() || removedBlocks > 0) notice.value =
+                (if (savedNames.isNotEmpty()) "Key saved securely as ${savedNames.distinct().joinToString { "'$it'" }}. The AI cannot see it, and it will not be pushed to GitHub. " else "") +
+                    (if (removedBlocks > 0) "A private key was removed from your message. " else "") + "Manage keys in Settings > API keys."
+            val t = cap.text
             var id = currentId.value
             if (id == null) {
                 id = Ids.id()
-                dao.upsertChat(ChatEntity(id, "New chat", Ids.now(), Ids.now(), repo = pendingRepo.value))
+                dao.upsertChat(ChatEntity(id, "New chat", Ids.now(), Ids.now(), repo = pendingRepo.value, extraRepos = pendingExtra.value.joinToString(",")))
+                pendingExtra.value = emptyList()
                 if (pendingRepo.value.isNotBlank()) store.lastRepo = pendingRepo.value
                 currentId.value = id
             }
@@ -221,6 +277,19 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     fun shareFile(att: Attachment) {
         val f = java.io.File(att.path)
         a.voice.error.value = com.aura.agent.agent.AndroidActions.share(a, f).takeIf { it.startsWith("ERROR") }.orEmpty()
+    }
+
+    /** Packs everything in the built-in phone workspace into one ZIP and opens the share sheet. */
+    fun shareWorkspaceZip() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val dir = com.aura.agent.agent.Workspace.dir(a)
+            val files = dir.walkTopDown().filter { it.isFile }.toList()
+            if (files.isEmpty()) { attachMsg.value = "The phone workspace is empty for now."; return@launch }
+            val out = java.io.File(a.filesDir, "generated/aura-workspace.zip").also { it.parentFile?.mkdirs() }
+            java.util.zip.ZipOutputStream(out.outputStream().buffered()).use { z -> files.forEach { f -> z.putNextEntry(java.util.zip.ZipEntry(f.relativeTo(dir).path)); f.inputStream().use { it.copyTo(z) }; z.closeEntry() } }
+            val r = com.aura.agent.agent.AndroidActions.share(a, out)
+            if (r.startsWith("ERROR")) attachMsg.value = r
+        }
     }
 
     val previewFile = MutableStateFlow<Attachment?>(null)

@@ -82,7 +82,7 @@ class SendFileToolTest {
         assertTrue(run("""{"name":"a.txt"}""").contains("give the file content"))
         assertTrue(run("""{"name":"a.bin","content_base64":"%%%"}""").contains("not valid base64"))
         app.extras.folders.value.forEach { app.extras.removeFolder(it.id) }
-        assertTrue(run("""{"name":"a.txt","folder_path":"x"}""").contains("connected phone folder"))
+        assertTrue("with no folder connected the built-in workspace is used", run("""{"name":"a.txt","folder_path":"x"}""").contains("does not exist in workspace"))
         assertTrue(run("""{"name":"a.txt","repo":"r","repo_path":"nope/missing.txt"}""").startsWith("ERROR"))
         assertEquals(0, ctx().produced.size)
     }

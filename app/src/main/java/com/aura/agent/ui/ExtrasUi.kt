@@ -280,6 +280,15 @@ fun FoldersSection(vm: MainVM) {
     var msg by remember { mutableStateOf("") }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> if (uri != null) msg = "Connected ${vm.addFolder(uri)}." }
     Text("Give Aura a folder on your phone to work in or keep backups in. Pick it with your file manager. Nothing is sent to GitHub unless you ask for it.", color = A.dim, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(bottom = 10.dp, start = 2.dp))
+    CardRow(Modifier.testTag("workspace-row")) {
+        AIcon(R.drawable.ic_file, tint = A.accent)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(androidx.compose.ui.res.stringResource(R.string.workspace_title), color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+            Text(androidx.compose.ui.res.stringResource(R.string.workspace_hint), color = A.dim, fontSize = 12.sp, lineHeight = 17.sp)
+        }
+        PillButton(androidx.compose.ui.res.stringResource(R.string.workspace_zip), { vm.shareWorkspaceZip() }, primary = false, modifier = Modifier.testTag("workspace-zip"))
+    }
     folders.forEach { f ->
         CardRow(Modifier.testTag("folder-row")) {
             AIcon(R.drawable.ic_file, tint = A.accent)
@@ -369,7 +378,7 @@ fun VaultSection(vm: MainVM) {
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(k.name, color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(k.baseUrl.removePrefix("https://") + "  -  " + styleText(k), color = A.dim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (k.baseUrl.isBlank()) "No address yet - the AI or you can set it" else k.baseUrl.removePrefix("https://") + "  -  " + styleText(k), color = if (k.baseUrl.isBlank()) A.accent else A.dim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text("Key hidden", color = A.dim, fontSize = 12.sp)
             }
             IconButton({ editing = k }, Modifier.testTag("vault-edit")) { AIcon(R.drawable.ic_edit, tint = A.dim, size = 20.dp) }
@@ -464,4 +473,49 @@ fun ContextGauge(used: Int, limit: Int, modifier: Modifier = Modifier) {
             Box(Modifier.fillMaxHeight().fillMaxWidth(fraction).background(color))
         }
     }
+}
+
+/** The phone folders of this chat in a sheet, opened from the chat's three-dots menu. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun FoldersSheet(vm: MainVM, onDismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = A.bg, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 24.dp).verticalScroll(rememberScrollState()).testTag("folders-sheet")) {
+            Text(androidx.compose.ui.res.stringResource(R.string.phone_folders), color = A.text, fontFamily = FontFamily.Serif, fontSize = 24.sp, modifier = Modifier.padding(vertical = 6.dp))
+            FoldersSection(vm)
+        }
+    }
+}
+
+/** The secure key box the AI can open. The user types the key; the AI never receives it. */
+@Composable
+fun SecretKeyDialog(ask: com.aura.agent.agent.SecretAsk, onSave: (com.aura.agent.agent.SecretReply) -> Unit, onCancel: () -> Unit) {
+    var url by remember(ask) { mutableStateOf(ask.baseUrl) }
+    var key by remember(ask) { mutableStateOf("") }
+    var err by remember(ask) { mutableStateOf("") }
+    val host = remember(url) { url.trim().removePrefix("https://").removePrefix("http://").substringBefore('/').ifBlank { "this address" } }
+    AlertDialog(
+        onDismissRequest = {}, containerColor = A.surface,
+        title = { Text("Secure key box", fontFamily = FontFamily.Serif) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()).testTag("secret-dialog"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Aura needs the key \"${ask.name}\"." + if (ask.reason.isNotBlank()) " ${ask.reason}" else "", color = A.text, fontSize = 14.sp, lineHeight = 20.sp)
+                Field("Address this key is for", url, { url = it; err = "" }, mono = true, tag = "secret-url")
+                Field("Key", key, { key = it; err = "" }, secret = true, mono = true, tag = "secret-key")
+                Text("The AI cannot see this key. It is stored encrypted on this phone and is only ever sent to $host. It is never pushed to GitHub.", color = A.dim, fontSize = 12.sp, lineHeight = 17.sp)
+                if (err.isNotBlank()) Text(err, color = A.danger, fontSize = 13.sp)
+            }
+        },
+        confirmButton = {
+            TextButton({
+                val u = url.trim().trimEnd('/')
+                when {
+                    key.isBlank() -> err = "Paste the key."
+                    !(u.startsWith("https://") || u.startsWith("http://")) || u.substringAfter("://").isBlank() -> err = "The address must start with https://"
+                    else -> onSave(com.aura.agent.agent.SecretReply(ask.name, u, key.trim(), ask.style, ask.param))
+                }
+            }, Modifier.testTag("secret-save")) { Text("Save key", color = A.accent) }
+        },
+        dismissButton = { TextButton(onCancel, Modifier.testTag("secret-cancel")) { Text("Not now", color = A.dim) } },
+    )
 }

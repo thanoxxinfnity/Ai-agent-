@@ -56,4 +56,11 @@
     <string name="search_models">मॉडल खोजें</string>
     <string name="choose_a_repository">एक रिपॉज़िटरी चुनें</string>
     <string name="context_label">कॉन्टेक्स्ट %1$s / %2$s</string>
+    <string name="add_repository">रिपॉज़िटरी जोड़ें</string>
+    <string name="new_repository">नई रिपॉज़िटरी</string>
+    <string name="phone_folders">फ़ोन के फ़ोल्डर</string>
+    <string name="remove_repo">%1$s हटाएँ</string>
+    <string name="workspace_title">Aura वर्कस्पेस</string>
+    <string name="workspace_hint">Aura के अंदर का एक निजी फ़ोल्डर। जब आप काम फ़ोन में ही रखना चाहें, तो Aura उसे यहाँ बनाता है।</string>
+    <string name="workspace_zip">ZIP के रूप में शेयर करें</string>
 </resources>

@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit
  * only for the address the user locked that key to, and strips it from anything that comes back.
  */
 object ToolsVault {
-    val NAMES = setOf("api_list", "api_request")
+    val NAMES = setOf("api_list", "api_request", "request_api_key", "api_configure")
     private const val MAX_BODY = 20_000
     private const val MAX_REDIRECTS = 3
 
@@ -32,6 +32,23 @@ object ToolsVault {
 
     val defs: List<ToolDef> = listOf(
         ToolDef("api_list", "List the API keys the user stored in the hidden key box: name, address and how it signs requests. You never see the key values.", schema(emptyList())),
+        ToolDef(
+            "request_api_key",
+            "Ask the user for an API key in the secure key box when a service needs a key that is not stored yet. YOU choose the address the key is for (use the service's real API address, from its documentation or from endpoints you already know); the user only types the key and taps Save. You never see the key; afterwards call api_request with its name. Do not ask for keys in the chat.",
+            schema(
+                listOf("name", "base_url"),
+                "name" to prop("string", "Short lower-case name, e.g. vercel or openweather"),
+                "base_url" to prop("string", "The https address of the service's API, e.g. https://api.vercel.com. The key can only be sent there."),
+                "style" to prop("string", "How the service wants the key: bearer (default), header, basic or query"),
+                "param" to prop("string", "Header name (style header) or query parameter (style query), e.g. x-api-key"),
+                "reason" to prop("string", "One short sentence shown to the user: what the key is for"),
+            ),
+        ),
+        ToolDef(
+            "api_configure",
+            "Give a stored key its address and style when it has none yet (for example a key the user pasted in the chat, which is saved without an address). The user approves. A key that already has an address cannot be re-pointed. You never see the key.",
+            schema(listOf("key", "base_url"), "key" to prop("string", "Name of the stored key"), "base_url" to prop("string", "The https address of the service's API"), "style" to prop("string", "bearer, header, basic or query"), "param" to prop("string", "Header name or query parameter")),
+        ),
         ToolDef(
             "api_request",
             "Call an HTTP API with one of the user's stored keys. The app adds the key; you only name it. The request may only go to the address that key is locked to. Non-read requests (POST, PUT, PATCH, DELETE) ask the user first. Never ask the user to paste a key in chat.",
@@ -49,7 +66,7 @@ object ToolsVault {
     /** What the model is told about the vault: names and addresses only. */
     fun promptBlock(keys: List<VaultKey>): String =
         if (keys.isEmpty()) "" else "API keys the user stored (hidden from you; call api_request with the key name, never ask for the value):\n" +
-            keys.joinToString("\n") { "- ${it.name}: ${it.baseUrl.trimEnd('/')} (${styleLabel(it)})" }
+            keys.joinToString("\n") { if (it.baseUrl.isBlank()) "- ${it.name}: no address yet (call api_configure with the service's API address)" else "- ${it.name}: ${it.baseUrl.trimEnd('/')} (${styleLabel(it)})" }
 
     private fun styleLabel(k: VaultKey) = when (k.style) {
         "header" -> "header ${k.param.ifBlank { "X-API-Key" }}"
@@ -59,6 +76,39 @@ object ToolsVault {
     }
 
     private fun JsonObject.s(k: String) = (this[k] as? JsonPrimitive)?.contentOrNull
+
+    private val styles = setOf("bearer", "header", "basic", "query")
+    private fun cleanBase(raw: String?): String? {
+        val u = raw?.trim()?.trimEnd('/')?.toHttpUrlOrNull() ?: return null
+        return if (u.scheme == "https" || u.scheme == "http") u.toString().trimEnd('/') else null
+    }
+
+    private suspend fun requestKey(ctx: ToolCtx, a: JsonObject): String {
+        val extras = ctx.app.extras
+        val name = extras.vaultName(a.s("name").orEmpty())
+        if (name.isBlank()) return "ERROR: name required (a short name such as vercel)"
+        val base = cleanBase(a.s("base_url")) ?: return "ERROR: base_url must be the service's https address, for example https://api.vercel.com"
+        val style = (a.s("style") ?: "bearer").lowercase().takeIf { it in styles } ?: return "ERROR: style must be bearer, header, basic or query."
+        val existing = extras.vault.value.firstOrNull { it.name == name }
+        if (existing != null && existing.baseUrl.trimEnd('/') == base && existing.key.isNotBlank()) return "A key named '$name' is already stored for $base. Use api_request with key=$name; do not ask the user again."
+        val reply = ctx.askSecret(SecretAsk(name, base, style, a.s("param").orEmpty(), a.s("reason").orEmpty()))
+            ?: return "DENIED: the user did not enter the key. Do not ask again unless they ask you to. Tell them they can add it any time under Settings > API keys."
+        if (reply.key.isBlank()) return "DENIED: no key was entered."
+        val finalBase = cleanBase(reply.baseUrl) ?: base
+        extras.upsertVault(com.aura.agent.data.VaultKey(existing?.id ?: com.aura.agent.data.Ids.id(), extras.vaultName(reply.name).ifBlank { name }, finalBase, reply.key.trim(), reply.style.takeIf { it in styles } ?: style, reply.param.trim()))
+        return "Saved the key '${extras.vaultName(reply.name).ifBlank { name }}' for $finalBase in the hidden key box. You cannot see it. Call api_request with key=${extras.vaultName(reply.name).ifBlank { name }} to use it."
+    }
+
+    private suspend fun configure(ctx: ToolCtx, a: JsonObject): String {
+        val extras = ctx.app.extras
+        val k = extras.vault.value.firstOrNull { it.name == extras.vaultName(a.s("key").orEmpty()) } ?: return "ERROR: no stored key with that name. Stored: ${extras.vault.value.joinToString { it.name }.ifBlank { "none" }}."
+        if (k.baseUrl.isNotBlank()) return "ERROR: '${k.name}' already has an address (${k.baseUrl}). Only the user can change it, in Settings > API keys."
+        val base = cleanBase(a.s("base_url")) ?: return "ERROR: base_url must be the service's https address."
+        val style = (a.s("style") ?: "bearer").lowercase().takeIf { it in styles } ?: return "ERROR: style must be bearer, header, basic or query."
+        if (!ctx.approve("Use the key '${k.name}' with ${base.toHttpUrlOrNull()?.host}?", "The key will only ever be sent to $base ($style).")) return "DENIED: the user did not approve that address. The key stays unused."
+        extras.upsertVault(k.copy(baseUrl = base, style = style, param = a.s("param").orEmpty().trim(), key = ""))
+        return "The key '${k.name}' is now set to $base. Call api_request with key=${k.name}."
+    }
 
     /** Every spelling of the key that could appear in a response, so none of them reaches the model. */
     internal fun variants(k: VaultKey): List<String> {
@@ -72,6 +122,7 @@ object ToolsVault {
 
     /** Resolves what the model asked for against the key's locked address; null plus a message when it must not go out. */
     internal fun resolve(k: VaultKey, urlArg: String): Pair<HttpUrl?, String> {
+        if (k.baseUrl.isBlank()) return null to "This key has no address yet. Call api_configure with the service's API address (the user approves it)."
         val base = k.baseUrl.trim().trimEnd('/').toHttpUrlOrNull() ?: return null to "The stored address for '${k.name}' is not valid. Ask the user to fix it in Settings > API keys."
         val full = if (urlArg.startsWith("http://") || urlArg.startsWith("https://")) urlArg.toHttpUrlOrNull()
         else (base.toString().trimEnd('/') + "/" + urlArg.trimStart('/')).toHttpUrlOrNull()
@@ -106,7 +157,9 @@ object ToolsVault {
     suspend fun run(ctx: ToolCtx, name: String, a: JsonObject): String {
         val keys = ctx.app.extras.vault.value
         if (name == "api_list") return if (keys.isEmpty()) "No API keys are stored. The user can add one in Settings > API keys." else promptBlock(keys)
-        if (ctx.readOnly) return "ERROR: workers are read-only and cannot use api_request."
+        if (ctx.readOnly) return "ERROR: workers are read-only and cannot use $name."
+        if (name == "request_api_key") return requestKey(ctx, a)
+        if (name == "api_configure") return configure(ctx, a)
         val keyName = a.s("key")?.trim()?.lowercase() ?: return "ERROR: key required"
         val k = keys.firstOrNull { it.name == keyName } ?: return "ERROR: no stored key named '$keyName'. " + if (keys.isEmpty()) "The user can add one in Settings > API keys." else "Stored: ${keys.joinToString { it.name }}."
         val (target, why) = resolve(k, a.s("url") ?: return "ERROR: url required")

@@ -62,6 +62,8 @@ fun MainScreen(vm: MainVM) {
             dismissButton = { TextButton({ crash = null }) { Text("Close", color = A.dim) } },
         )
     }
+    val secretAsk by vm.runner.secretAsk.collectAsState()
+    secretAsk?.let { (id, ask) -> SecretKeyDialog(ask, onSave = { vm.runner.resolveSecret(id, it) }, onCancel = { vm.runner.resolveSecret(id, null) }) }
     val approval by vm.runner.approval.collectAsState()
     approval?.let { ap ->
         AlertDialog(
@@ -128,11 +130,16 @@ fun ChatHost(vm: MainVM) {
     var input by remember { mutableStateOf("") }
     var picker by remember { mutableStateOf(false) }
     var repoPicker by remember { mutableStateOf(false) }
+    var addRepoMode by remember { mutableStateOf(false) }
+    var newRepoFirst by remember { mutableStateOf(false) }
+    var foldersSheet by remember { mutableStateOf(false) }
+    var chatMenu by remember { mutableStateOf(false) }
     val pending by vm.pending.collectAsState()
     val attachMsg by vm.attachMsg.collectAsState()
     val previewing by vm.previewFile.collectAsState()
     previewing?.let { p -> FilePreviewDialog(p, onDownload = { vm.saveFileToPhone(p) }, onShare = { vm.shareFile(p) }, onDismiss = { vm.closePreview() }) }
     val pendingRepo by vm.pendingRepo.collectAsState()
+    val pendingExtra by vm.pendingExtra.collectAsState()
     val pinnedRepo by vm.store.pinnedRepo.collectAsState()
     val pickImages = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetMultipleContents()) { vm.attach(it) }
     val pickFiles = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetMultipleContents()) { vm.attach(it) }
@@ -166,8 +173,10 @@ fun ChatHost(vm: MainVM) {
                         chat?.title ?: "Aura", color = A.text, fontFamily = FontFamily.Serif, fontWeight = FontWeight.Medium,
                         fontSize = 19.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
-                    val repoLabel = if (chat != null) chat.repo else pendingRepo
-                    if (repoLabel.isNotBlank()) Text(repoLabel, color = A.dim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    val attached = vm.repoList(chat)
+                    val extraSeen = pendingExtra.size   // read so the label follows changes made before the first message
+                    val repoLabel = attached.firstOrNull().orEmpty() + if (attached.size > 1) "  +${attached.size - 1}" else ""
+                    if (repoLabel.isNotBlank()) Text(repoLabel, color = A.dim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("repo-label"))
                     if (messages.isNotEmpty()) {
                         val ctxLimit by vm.store.contextTokens.collectAsState()
                         val used = remember(messages) { com.aura.agent.agent.ContextMeter.usedTokens(messages) }
@@ -175,6 +184,21 @@ fun ChatHost(vm: MainVM) {
                     }
                 }
                 IconBtn(R.drawable.ic_plus, { vm.openChat(null); input = "" })
+                Box {
+                    IconBtn(R.drawable.ic_more, { chatMenu = true }, tint = A.dim, modifier = Modifier.testTag("chat-menu"))
+                    DropdownMenu(chatMenu, { chatMenu = false }) {
+                        DropdownMenuItem(text = { Text(stringResource(R.string.add_repository)) }, leadingIcon = { AIcon(R.drawable.ic_branch, size = 18.dp) }, modifier = Modifier.testTag("menu-add-repo"),
+                            onClick = { chatMenu = false; addRepoMode = true; newRepoFirst = false; repoPicker = true })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.new_repository)) }, leadingIcon = { AIcon(R.drawable.ic_plus, size = 18.dp) }, modifier = Modifier.testTag("menu-new-repo"),
+                            onClick = { chatMenu = false; addRepoMode = true; newRepoFirst = true; repoPicker = true })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.phone_folders)) }, leadingIcon = { AIcon(R.drawable.ic_file, size = 18.dp) }, modifier = Modifier.testTag("menu-folders"),
+                            onClick = { chatMenu = false; foldersSheet = true })
+                        vm.repoList(chat).forEach { r ->
+                            DropdownMenuItem(text = { Text(stringResource(R.string.remove_repo, r), maxLines = 1, overflow = TextOverflow.Ellipsis) }, leadingIcon = { AIcon(R.drawable.ic_close, size = 18.dp) }, modifier = Modifier.testTag("menu-remove-repo"),
+                                onClick = { chatMenu = false; vm.detachRepo(r) })
+                        }
+                    }
+                }
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (messages.isEmpty()) {
@@ -207,6 +231,8 @@ fun ChatHost(vm: MainVM) {
             }
             val voiceErr by vm.voice.error.collectAsState()
             if (voiceErr.isNotBlank()) Text(voiceErr, color = A.danger, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 20.dp).clickable { vm.voice.error.value = "" })
+            val notice by vm.notice.collectAsState()
+            if (notice.isNotBlank()) Text(notice, color = A.accent, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp).clickable { vm.notice.value = "" }.testTag("notice"))
             if (attachMsg.isNotBlank()) Text(attachMsg, color = A.danger, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 20.dp).clickable { vm.attachMsg.value = "" })
             Composer(
                 value = input, onValue = { input = it }, running = running, modelLabel = modelLabel,
@@ -219,7 +245,8 @@ fun ChatHost(vm: MainVM) {
         }
     }
 
-    if (repoPicker) RepoPicker(vm) { repoPicker = false }
+    if (repoPicker) RepoPicker(vm, attach = addRepoMode, createFirst = newRepoFirst, attached = vm.repoList(chat)) { repoPicker = false; addRepoMode = false; newRepoFirst = false }
+    if (foldersSheet) FoldersSheet(vm) { foldersSheet = false }
     if (picker) ModelPicker(
         providers = providers, activeProvider = activeProvider, activeModel = activeModel, auto = auto,
         onAuto = { vm.store.setAuto(true); picker = false },
@@ -663,14 +690,14 @@ private fun SkillPopup(skills: List<com.aura.agent.data.Skill>, off: Set<String>
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun RepoPicker(vm: MainVM, onDismiss: () -> Unit) {
+private fun RepoPicker(vm: MainVM, attach: Boolean = false, createFirst: Boolean = false, attached: List<String> = emptyList(), onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
     val repos by vm.repos.collectAsState()
     val state by vm.reposState.collectAsState()
     val selected by vm.pendingRepo.collectAsState()
     val pinned by vm.store.pinnedRepo.collectAsState()
     var q by remember { mutableStateOf("") }
-    var creating by remember { mutableStateOf(false) }
+    var creating by remember { mutableStateOf(createFirst) }
     var name by remember { mutableStateOf("") }
     var desc by remember { mutableStateOf("") }
     var priv by remember { mutableStateOf(true) }
@@ -713,7 +740,7 @@ private fun RepoPicker(vm: MainVM, onDismiss: () -> Unit) {
                         }
                         PillButton("Create and use", {
                             busy = true; err = ""
-                            scope.launch { vm.createRepo(name, desc, priv).onSuccess { onDismiss() }.onFailure { err = it.message ?: "Could not create the repository" }; busy = false }
+                            scope.launch { vm.createRepo(name, desc, priv, select = !attach).onSuccess { if (attach) vm.attachRepo(it); onDismiss() }.onFailure { err = it.message ?: "Could not create the repository" }; busy = false }
                         }, enabled = name.isNotBlank(), loading = busy)
                         if (err.isNotBlank()) Text(err, color = A.danger, fontSize = 13.sp)
                     }
@@ -733,7 +760,7 @@ private fun RepoPicker(vm: MainVM, onDismiss: () -> Unit) {
                     } else if (state.isNotBlank()) Text(state, color = A.danger, fontSize = 13.sp, modifier = Modifier.padding(12.dp))
                 }
                 items(repos.filter { q.isBlank() || it.full.contains(q, true) }, key = { it.full }) { r ->
-                    RepoRow(r.full, r.description.ifBlank { if (r.private) "Private" else "Public" }, r.full == selected, lock = r.private, pinned = r.full == pinned, onPin = { vm.pinRepo(if (r.full == pinned) "" else r.full) }) { vm.pendingRepo.value = r.full; onDismiss() }
+                    RepoRow(r.full, r.description.ifBlank { if (r.private) "Private" else "Public" }, (if (attach) r.full in attached else r.full == selected), lock = r.private, pinned = r.full == pinned, onPin = { vm.pinRepo(if (r.full == pinned) "" else r.full) }) { if (attach) vm.attachRepo(r.full) else vm.pendingRepo.value = r.full; onDismiss() }
                 }
                 item { PickerFolders(vm) }
             }

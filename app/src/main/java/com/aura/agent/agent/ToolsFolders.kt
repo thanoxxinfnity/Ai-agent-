@@ -9,10 +9,11 @@ import java.util.Base64
  * talks to GitHub except the two tools the user has to ask for (backup_repo_to_folder reads, push_folder_to_repo writes).
  */
 object ToolsFolders {
-    val NAMES = setOf("folder_list", "folder_read", "folder_write", "folder_edit", "folder_search", "folder_delete", "backup_repo_to_folder", "push_folder_to_repo")
+    val NAMES = setOf("folder_list", "folder_read", "folder_write", "folder_edit", "folder_search", "folder_delete", "folder_copy", "folder_zip", "backup_repo_to_folder", "push_folder_to_repo")
     val READ_ONLY = setOf("folder_list", "folder_read", "folder_search")
 
     private const val MAX_READ = 60_000
+    private const val MAX_COPY = 25 * 1024 * 1024
     private const val MAX_PUSH_FILES = 300
     private const val MAX_PUSH_FILE_BYTES = 2 * 1024 * 1024
     private val SKIP_DIRS = setOf(".git", "node_modules", ".gradle", "build", ".idea", "__pycache__", ".venv")
@@ -32,6 +33,8 @@ object ToolsFolders {
         com.aura.agent.net.ToolDef("folder_edit", "Exact search and replace inside one file of a connected phone folder. old_string must occur exactly once.", schema(listOf("folder", "path", "old_string", "new_string"), "folder" to folderProp, "path" to prop("string", "File path"), "old_string" to prop("string", "Exact existing text"), "new_string" to prop("string", "Replacement"))),
         com.aura.agent.net.ToolDef("folder_search", "Search for text inside the files of a connected phone folder.", schema(listOf("folder", "query"), "folder" to folderProp, "query" to prop("string", "Text to find (case-insensitive)"), "path" to prop("string", "Limit to a sub-folder"))),
         com.aura.agent.net.ToolDef("folder_delete", "Delete a file or sub-folder in a connected phone folder. The user approves first.", schema(listOf("folder", "path"), "folder" to folderProp, "path" to prop("string", "File or sub-folder path"))),
+        com.aura.agent.net.ToolDef("folder_copy", "Copy a file or a whole sub-folder from one phone folder to another (or inside one), for example from the phone workspace to a connected folder.", schema(listOf("from_folder", "from_path", "to_folder"), "from_folder" to prop("string", "Source folder name"), "from_path" to prop("string", "File or sub-folder in the source"), "to_folder" to prop("string", "Destination folder name"), "to_path" to prop("string", "Path in the destination, default the same as the source"))),
+        com.aura.agent.net.ToolDef("folder_zip", "Pack a phone folder (or a sub-folder) into one ZIP file and give it to the user in the chat with Download and Share. Use it to hand over a whole project.", schema(listOf("folder"), "folder" to folderProp, "path" to prop("string", "Sub-folder, default the whole folder"), "name" to prop("string", "ZIP file name, default the folder name"))),
         com.aura.agent.net.ToolDef(
             "backup_repo_to_folder", "Copy a GitHub repository into a connected phone folder as a private backup (nothing is pushed anywhere). Only when the user asks for a backup.",
             schema(listOf("folder"), "folder" to folderProp, "repo" to prop("string", "owner/name, default the chat's repository"), "branch" to prop("string", "Branch or tag, default the default branch"), "subfolder" to prop("string", "Where inside the folder, default the repository name")),
@@ -45,19 +48,29 @@ object ToolsFolders {
     private fun JsonObject.s(k: String) = (this[k] as? JsonPrimitive)?.contentOrNull
     private fun JsonObject.n(k: String) = (this[k] as? JsonPrimitive)?.content?.toDoubleOrNull()?.toInt()
 
-    private fun pick(ctx: ToolCtx, name: String?): Pair<LocalFolder, FolderBackend>? {
-        val all = ctx.store.let { ctx.app.extras.enabledFolders() }
-        val f = (if (name.isNullOrBlank()) all.singleOrNull() else all.firstOrNull { it.name.equals(name, true) }) ?: return null
+    /**
+     * Finds the folder the model means. No name: the one connected folder, or the built-in phone workspace when none is connected.
+     * "workspace" always works.
+     */
+    internal fun resolve(ctx: ToolCtx, name: String?): Pair<LocalFolder, FolderBackend>? {
+        val user = ctx.app.extras.enabledFolders()
+        val f = when {
+            name.isNullOrBlank() -> when { user.isEmpty() -> Workspace.folder; user.size == 1 -> user[0]; else -> return null }
+            name.equals(Workspace.NAME, true) -> Workspace.folder
+            else -> user.firstOrNull { it.name.equals(name, true) } ?: return null
+        }
         return f to FolderAccess.open(ctx.app, f)
     }
 
+    private fun pick(ctx: ToolCtx, name: String?) = resolve(ctx, name)
+
     private fun notFound(ctx: ToolCtx, name: String?): String {
         val all = ctx.app.extras.folders.value
+        val names = (listOf(Workspace.NAME) + all.filter { it.enabled }.map { it.name }).joinToString()
         return when {
-            all.isEmpty() -> "ERROR: no phone folder is connected. Ask the user to connect one in Settings > Phone folders (or beside the repository picker)."
-            name.isNullOrBlank() -> "ERROR: several folders are connected, pass folder: " + all.joinToString { it.name }
+            name.isNullOrBlank() -> "ERROR: several folders are connected, pass folder: $names"
             all.any { it.name.equals(name, true) && !it.enabled } -> "ERROR: the folder '$name' is disconnected. Ask the user to switch it on in Settings > Phone folders."
-            else -> "ERROR: no connected folder named '$name'. Connected: " + all.filter { it.enabled }.joinToString { it.name }.ifBlank { "none" }
+            else -> "ERROR: no connected folder named '$name'. Available: $names"
         }
     }
 
@@ -69,8 +82,9 @@ object ToolsFolders {
         if (ctx.readOnly && name !in READ_ONLY) return "ERROR: workers are read-only and cannot use $name."
         if (name == "folder_list" && a.s("folder").isNullOrBlank()) {
             val all = ctx.app.extras.folders.value
-            return if (all.isEmpty()) "No phone folder is connected. The user can add one in Settings > Phone folders." else
-                all.joinToString("\n") { "- ${it.name}: " + if (it.enabled) "connected" else "disconnected by the user" }
+            return "- ${Workspace.NAME}: built-in space inside Aura on this phone, always available (use it when the user wants work kept on the phone)\n" +
+                if (all.isEmpty()) "No other phone folder is connected. The user can add one in Settings > Phone folders." else
+                    all.joinToString("\n") { "- ${it.name}: " + if (it.enabled) "connected" else "disconnected by the user" }
         }
         val (folder, fs) = pick(ctx, a.s("folder")) ?: return notFound(ctx, a.s("folder"))
         return try {
@@ -118,6 +132,8 @@ object ToolsFolders {
                     if (!ctx.approve("Delete in ${folder.name}", path)) return "DENIED: the user did not approve deleting $path."
                     if (fs.delete(path)) "Deleted $path." else "ERROR: could not delete $path."
                 }
+                "folder_copy" -> copy(ctx, a)
+                "folder_zip" -> zip(ctx, folder, fs, a)
                 "backup_repo_to_folder" -> backup(ctx, folder, fs, a)
                 "push_folder_to_repo" -> push(ctx, folder, fs, a)
                 else -> "ERROR: unknown tool $name"
@@ -147,6 +163,49 @@ object ToolsFolders {
             String(bytes, Charsets.UTF_8).lines().forEachIndexed { i, l -> if (hits.size < 60 && l.lowercase().contains(q)) hits += "$p:${i + 1}: ${l.trim().take(160)}" }
         }
         return if (hits.isEmpty()) "No match." else hits.joinToString("\n")
+    }
+
+    private suspend fun copy(ctx: ToolCtx, a: JsonObject): String {
+        val (fromF, from) = resolve(ctx, a.s("from_folder")) ?: return notFound(ctx, a.s("from_folder"))
+        val (toF, to) = resolve(ctx, a.s("to_folder")) ?: return notFound(ctx, a.s("to_folder"))
+        val src = (a.s("from_path") ?: return "ERROR: from_path required").trim('/')
+        val dest = (a.s("to_path") ?: src).trim('/')
+        val st = from.stat(src) ?: return "ERROR: $src does not exist in ${fromF.name}."
+        val files = if (st.isDir) walk(from, src, limit = 501).map { it to (dest.ifBlank { "" } + "/" + it.removePrefix("$src/")).trim('/') } else listOf(src to dest)
+        if (files.size > 500) return "ERROR: more than 500 files. Copy a smaller sub-folder."
+        if (files.isEmpty()) return "ERROR: there is nothing to copy in $src."
+        if (files.any { (_, d) -> to.stat(d) != null } && ctx.store.guardrails.value && !ctx.approve("Replace files in ${toF.name}", files.filter { (_, d) -> to.stat(d) != null }.take(8).joinToString("\n") { it.second })) {
+            return "DENIED: the user did not approve replacing existing files. Nothing was copied."
+        }
+        var bytes = 0L
+        for ((p, d) in files) {
+            val b = from.read(p, MAX_COPY) ?: continue
+            if (b.size > MAX_COPY) return "ERROR: $p is larger than ${MAX_COPY / 1024 / 1024} MB."
+            to.write(d, b); bytes += b.size
+        }
+        return "Copied ${files.size} file(s) (${size(bytes)}) from ${fromF.name}/$src to ${toF.name}/$dest."
+    }
+
+    private fun zip(ctx: ToolCtx, folder: LocalFolder, fs: FolderBackend, a: JsonObject): String {
+        val path = a.s("path").orEmpty().trim('/')
+        val files = walk(fs, path, limit = 2001)
+        if (files.isEmpty()) return "ERROR: there are no files to pack in ${folder.name}/$path."
+        if (files.size > 2000) return "ERROR: more than 2000 files. Pack a smaller sub-folder."
+        val base = com.aura.agent.data.ImageFiles.safeName((a.s("name")?.takeIf { it.isNotBlank() } ?: (path.substringAfterLast('/').ifBlank { folder.name })).removeSuffix(".zip")) + ".zip"
+        val dir = java.io.File(ctx.app.filesDir, "generated").also { it.mkdirs() }
+        var out = java.io.File(dir, base); var i = 2
+        while (out.exists()) { out = java.io.File(dir, base.removeSuffix(".zip") + " ($i).zip"); i++ }
+        var total = 0L
+        java.util.zip.ZipOutputStream(out.outputStream().buffered()).use { z ->
+            for (p in files) {
+                val b = fs.read(p, MAX_COPY) ?: continue
+                total += b.size
+                if (total > 60L * 1024 * 1024) { out.delete(); return "ERROR: the files add up to more than 60 MB. Pack a smaller sub-folder." }
+                z.putNextEntry(java.util.zip.ZipEntry(if (path.isBlank()) p else p.removePrefix("$path/"))); z.write(b); z.closeEntry()
+            }
+        }
+        ctx.produced += com.aura.agent.data.Attachment(out.name, "application/zip", out.length(), out.absolutePath, "file")
+        return "Packed ${files.size} file(s) into ${out.name} (${size(out.length())}) and gave it to the user in the chat to download or share."
     }
 
     private suspend fun backup(ctx: ToolCtx, folder: LocalFolder, fs: FolderBackend, a: JsonObject): String {
