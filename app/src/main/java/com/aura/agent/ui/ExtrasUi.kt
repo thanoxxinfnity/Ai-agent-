@@ -345,3 +345,105 @@ fun PickerFolders(vm: MainVM) {
         }
     }
 }
+
+// ------------------------------------------------------------------ hidden API keys
+
+private fun styleText(k: com.aura.agent.data.VaultKey) = when (k.style) {
+    "header" -> "header ${k.param.ifBlank { "X-API-Key" }}"
+    "basic" -> "basic auth"
+    "query" -> "query ?${k.param.ifBlank { "key" }}="
+    else -> "bearer token"
+}
+
+/** A secure box for API keys. The AI can use a key by name but can never read it. */
+@Composable
+fun VaultSection(vm: MainVM) {
+    val keys by vm.extras.vault.collectAsState()
+    var editing by remember { mutableStateOf<com.aura.agent.data.VaultKey?>(null) }
+    var adding by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf<com.aura.agent.data.VaultKey?>(null) }
+    Text("Keys saved here stay on this phone, encrypted. Aura's AI never sees them: it can only ask the app to send a request that uses a key, and only to the address you lock that key to.", color = A.dim, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(bottom = 10.dp, start = 2.dp))
+    keys.forEach { k ->
+        CardRow(Modifier.testTag("vault-row")) {
+            AIcon(R.drawable.ic_key, tint = A.accent)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(k.name, color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(k.baseUrl.removePrefix("https://") + "  -  " + styleText(k), color = A.dim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Key hidden", color = A.dim, fontSize = 12.sp)
+            }
+            IconButton({ editing = k }, Modifier.testTag("vault-edit")) { AIcon(R.drawable.ic_edit, tint = A.dim, size = 20.dp) }
+            IconButton({ deleting = k }, Modifier.testTag("vault-delete")) { AIcon(R.drawable.ic_trash, tint = A.dim, size = 20.dp) }
+        }
+    }
+    PillButton("Add an API key", { adding = true }, primary = false, modifier = Modifier.testTag("vault-add"))
+    if (adding) VaultDialog(null, keys.map { it.name }, { adding = false }) { vm.extras.upsertVault(it); adding = false }
+    editing?.let { e -> VaultDialog(e, keys.filter { it.id != e.id }.map { it.name }, { editing = null }) { vm.extras.upsertVault(it); editing = null } }
+    deleting?.let { d ->
+        AlertDialog(
+            onDismissRequest = { deleting = null }, containerColor = A.surface,
+            title = { Text("Delete ${d.name}?", fontFamily = FontFamily.Serif) },
+            text = { Text("The key is erased from this phone. Aura can no longer use it.", color = A.dim, fontSize = 14.sp) },
+            confirmButton = { TextButton({ vm.extras.removeVault(d.id); deleting = null }, Modifier.testTag("vault-delete-confirm")) { Text("Delete", color = A.danger) } },
+            dismissButton = { TextButton({ deleting = null }) { Text("Cancel", color = A.dim) } },
+        )
+    }
+}
+
+@Composable
+private fun VaultDialog(existing: com.aura.agent.data.VaultKey?, taken: List<String>, onDismiss: () -> Unit, onSave: (com.aura.agent.data.VaultKey) -> Unit) {
+    var name by remember { mutableStateOf(existing?.name ?: "") }
+    var url by remember { mutableStateOf(existing?.baseUrl ?: "https://") }
+    var key by remember { mutableStateOf("") }
+    var style by remember { mutableStateOf(existing?.style ?: "bearer") }
+    var param by remember { mutableStateOf(existing?.param ?: "") }
+    var err by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss, containerColor = A.surface,
+        title = { Text(if (existing == null) "Add an API key" else "Edit ${existing.name}", fontFamily = FontFamily.Serif) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Field("Name (what Aura calls it)", name, { name = it; err = "" }, placeholder = "vercel", tag = "vault-name")
+                Field("Address it may be sent to", url, { url = it; err = "" }, placeholder = "https://api.example.com", mono = true, tag = "vault-url")
+                Field(if (existing == null) "Key" else "Key (leave empty to keep the saved one)", key, { key = it; err = "" }, secret = true, mono = true, tag = "vault-key")
+                Column {
+                    Text("How the key is sent", color = A.dim, fontSize = 12.sp, modifier = Modifier.padding(bottom = 6.dp, start = 2.dp))
+                    Segmented(listOf("bearer" to "Bearer", "header" to "Header", "basic" to "Basic", "query" to "Query"), style) { style = it }
+                }
+                if (style == "header" || style == "query") Field(if (style == "header") "Header name" else "Parameter name", param, { param = it }, placeholder = if (style == "header") "X-API-Key" else "key", mono = true, tag = "vault-param")
+                if (style == "basic") Text("For basic auth enter the key as username:password.", color = A.dim, fontSize = 12.sp)
+                if (err.isNotBlank()) Text(err, color = A.danger, fontSize = 13.sp)
+            }
+        },
+        confirmButton = {
+            TextButton({
+                val n = vmName(name)
+                val u = url.trim().trimEnd('/')
+                when {
+                    n.isBlank() -> err = "Give the key a short name."
+                    n in taken -> err = "A key named $n already exists."
+                    !(u.startsWith("https://") || u.startsWith("http://")) || u.substringAfter("://").isBlank() -> err = "The address must start with https://"
+                    existing == null && key.isBlank() -> err = "Paste the key."
+                    else -> onSave(com.aura.agent.data.VaultKey(existing?.id ?: Ids.id(), n, u, key.trim(), style, param.trim()))
+                }
+            }, Modifier.testTag("vault-save")) { Text("Save", color = A.accent) }
+        },
+        dismissButton = { TextButton(onDismiss) { Text("Cancel", color = A.dim) } },
+    )
+}
+
+private fun vmName(raw: String) = raw.trim().lowercase().replace(Regex("[^a-z0-9_-]+"), "-").trim('-').take(32)
+
+// ------------------------------------------------------------------ GitHub push consent
+
+@Composable
+fun PushConsentSection(vm: MainVM) {
+    val on by vm.extras.askBeforePush.collectAsState()
+    CardRow {
+        Column(Modifier.weight(1f)) {
+            Text("Ask before pushing to GitHub", color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+            Text("Aura asks first: push to GitHub, or keep the files on your phone. Nothing is pushed without your yes.", color = A.dim, fontSize = 13.sp, lineHeight = 18.sp)
+        }
+        AuraSwitch(on, "ask-push") { vm.extras.setAskBeforePush(it) }
+    }
+}

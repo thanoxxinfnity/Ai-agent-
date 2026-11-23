@@ -113,7 +113,7 @@ object ToolsVercel {
                 (done.error?.let { "\n$it" } ?: "") + (if (log.isNotBlank()) "\n--- build log ---\n$log" else "") +
                 "\nFix the cause (read the log above) and call vercel_deploy again."
         }
-        val url = vercel.publicUrl(done, production)
+        val url = vercel.publicUrl(done, production, project, if (production) vercel.projectDomains(project) else emptyList())
         return "Deployed to Vercel (${if (production) "production" else "preview"}). Live link: $url\nProject: $project, deployment ${done.id}." +
             if (production) "" else "\nNote: preview links can be protected by Vercel login; use production=true for a public link."
     }

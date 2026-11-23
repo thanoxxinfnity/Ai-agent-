@@ -111,9 +111,27 @@ class Vercel(private val token: String, private val team: String = "", private v
         return cur
     }
 
-    fun publicUrl(d: Deployment, production: Boolean): String {
-        val host = if (production) d.alias.firstOrNull { !it.contains("-git-") } ?: d.alias.firstOrNull() ?: d.url else d.url
+    /** The addresses Vercel gave the project (for example proj.vercel.app); empty when they cannot be read. */
+    suspend fun projectDomains(project: String): List<String> = runCatching {
+        val o = call(req(url("/v9/projects/$project/domains")).get().build())
+        (o["domains"] as? JsonArray).orEmpty().mapNotNull { d ->
+            val x = d as? JsonObject ?: return@mapNotNull null
+            if ((x["redirect"] as? JsonPrimitive)?.contentOrNull != null) null else (x["name"] as? JsonPrimitive)?.contentOrNull
+        }
+    }.getOrDefault(emptyList())
+
+    /**
+     * The link to give the user. A production deployment has several addresses; the project's own address (project.vercel.app)
+     * serves the site, while the longer project-team address shows Vercel's own login page. So: the project's own address when
+     * it is known, otherwise the shortest address that is not a branch address.
+     */
+    fun publicUrl(d: Deployment, production: Boolean, project: String = "", domains: List<String> = emptyList()): String {
+        val host = if (production) {
+            val clean = (domains + d.alias).map { it.removePrefix("https://") }.filter { !it.contains("-git-") }.distinct()
+            clean.firstOrNull { project.isNotBlank() && it.equals("$project.vercel.app", true) }
+                ?: clean.filter { it.endsWith(".vercel.app") }.minByOrNull { it.length }
+                ?: clean.minByOrNull { it.length } ?: d.alias.firstOrNull() ?: d.url
+        } else d.url
         return "https://" + host.removePrefix("https://")
     }
 }
-

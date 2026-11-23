@@ -26,7 +26,7 @@ object Tools {
         putJsonArray("required") { add("path"); add("content") }
     }
 
-    val defs: List<ToolDef> by lazy { (baseDefs + ToolsPro.defs + ToolsVercel.defs + ToolsMemory.defs + ToolsLive.defs + ToolsMcp.defs + ToolsFolders.defs).map(::relaxRepo) }
+    val defs: List<ToolDef> by lazy { (baseDefs + ToolsPro.defs + ToolsVercel.defs + ToolsMemory.defs + ToolsLive.defs + ToolsMcp.defs + ToolsFolders.defs + ToolsVault.defs + ToolsFiles.defs).map(::relaxRepo) }
 
     /** `repo` stops being required: it defaults to the repository chosen when the chat started. */
     private fun relaxRepo(t: ToolDef): ToolDef {
@@ -170,6 +170,8 @@ object Tools {
         if (name in ToolsLive.NAMES) return ToolsLive.run(ctx, name, a)
         if (name in ToolsMcp.NAMES) return ToolsMcp.run(ctx, name, a)
         if (name in ToolsFolders.NAMES) return ToolsFolders.run(ctx, name, a)
+        if (name in ToolsVault.NAMES) return ToolsVault.run(ctx, name, a)
+        if (name in ToolsFiles.NAMES) return ToolsFiles.run(ctx, name, a)
         if (ctx.app.mcp.owns(name)) return ctx.app.mcp.call(ctx, name, a)
         if (name in CLOUD_TOOLS) return runCloud(name, a, ctx)
         val token = store.githubToken.value
@@ -184,6 +186,7 @@ object Tools {
                     "${it.s("full_name")}${if (it.o()["private"]?.jsonPrimitive?.booleanOrNull == true) " (private)" else ""}"
                 }.ifBlank { "No repositories yet" }
                 "github_create_repo" -> {
+                    ctx.confirmGithubPush("Create the repository ${a.s("name").orEmpty()} (${if (a.b("private") == true) "private" else "public"}) on your GitHub account.")?.let { return it }
                     val r = gh.call("POST", "/user/repos", buildJsonObject {
                         put("name", a.s("name") ?: return "ERROR: name required")
                         put("description", a.s("description").orEmpty())
@@ -325,6 +328,7 @@ object Tools {
             if (fo.s("encoding") == "base64") continue
             Guard.looksTruncated(fo.s("content").orEmpty())?.let { return "ERROR: ${fo.s("path")} contains a placeholder ($it). Nothing was pushed. Write the complete file, or use edit_file_diff for a small change." }
         }
+        ctx.confirmGithubPush("Push ${files.size} file(s) to $repo.", files.mapNotNull { it.o().s("path") }.take(12).joinToString("\n") { "  $it" })?.let { return it }
         val branch = a.s("branch") ?: gh.call("GET", "/repos/$repo").s("default_branch")!!
         val parent = gh.call("GET", "/repos/$repo/git/ref/heads/$branch").o()["object"].s("sha")!!
         val baseTree = gh.call("GET", "/repos/$repo/git/commits/$parent").o()["tree"].s("sha")!!
@@ -419,6 +423,9 @@ object Tools {
         "save_memory" -> "Saving to memory"
         "search_memory" -> "Searching memory"
         "delete_memory" -> "Forgetting"
+        "send_file" -> "Preparing a file for you"
+        "api_list" -> "Checking stored API keys"
+        "api_request" -> "Calling an API"
         "mcp_list" -> "Checking MCP servers"
         "mcp_search" -> "Searching the MCP registry"
         "mcp_connect" -> "Connecting an MCP server"

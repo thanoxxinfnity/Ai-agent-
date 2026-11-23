@@ -223,6 +223,10 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         a.voice.error.value = com.aura.agent.agent.AndroidActions.share(a, f).takeIf { it.startsWith("ERROR") }.orEmpty()
     }
 
+    val previewFile = MutableStateFlow<Attachment?>(null)
+    fun openPreview(att: Attachment) { previewFile.value = att }
+    fun closePreview() { previewFile.value = null }
+
     fun saveFileToPhone(att: Attachment) {
         viewModelScope.launch(Dispatchers.IO) { attachMsg.value = com.aura.agent.agent.AndroidActions.saveToPhone(a, java.io.File(att.path)) }
     }

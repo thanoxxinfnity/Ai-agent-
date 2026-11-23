@@ -129,6 +129,8 @@ fun ChatHost(vm: MainVM) {
     var repoPicker by remember { mutableStateOf(false) }
     val pending by vm.pending.collectAsState()
     val attachMsg by vm.attachMsg.collectAsState()
+    val previewing by vm.previewFile.collectAsState()
+    previewing?.let { p -> FilePreviewDialog(p, onDownload = { vm.saveFileToPhone(p) }, onShare = { vm.shareFile(p) }, onDismiss = { vm.closePreview() }) }
     val pendingRepo by vm.pendingRepo.collectAsState()
     val pinnedRepo by vm.store.pinnedRepo.collectAsState()
     val pickImages = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetMultipleContents()) { vm.attach(it) }
@@ -255,7 +257,7 @@ private fun MessageList(messages: List<MessageEntity>, vm: MainVM) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (running) item(key = "thinking") { Thinking(status) }
-        items(reversed, key = { it.id }) { m -> MessageItem(m, liveState, restoreFor[m.id]?.let { t -> cps[t] ?: 0 }, { restoreFor[m.id]?.let { t -> confirmTurn = t } }, voiceState, vm::shareFile, vm::saveFileToPhone) { vm.voice.speak(m.id, m.content) } }
+        items(reversed, key = { it.id }) { m -> MessageItem(m, liveState, restoreFor[m.id]?.let { t -> cps[t] ?: 0 }, { restoreFor[m.id]?.let { t -> confirmTurn = t } }, voiceState, vm::shareFile, vm::saveFileToPhone, vm::openPreview) { vm.voice.speak(m.id, m.content) } }
     }
     AnimatedVisibility(
         visible = !atBottom, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
@@ -280,7 +282,7 @@ private fun MessageList(messages: List<MessageEntity>, vm: MainVM) {
 }
 
 @Composable
-private fun MessageItem(m: MessageEntity, live: State<Map<String, String>>, restoreCount: Int?, onRestore: () -> Unit, voice: State<com.aura.agent.agent.VoiceState>, onShare: (Attachment) -> Unit, onSave: (Attachment) -> Unit, onSpeak: () -> Unit) {
+private fun MessageItem(m: MessageEntity, live: State<Map<String, String>>, restoreCount: Int?, onRestore: () -> Unit, voice: State<com.aura.agent.agent.VoiceState>, onShare: (Attachment) -> Unit, onSave: (Attachment) -> Unit, onPreview: (Attachment) -> Unit, onSpeak: () -> Unit) {
     when (m.role) {
         "user" -> UserBubble(m.content, remember(m.attachments) { Attachments.parse(m.attachments) })
         "assistant" -> {
@@ -292,7 +294,7 @@ private fun MessageItem(m: MessageEntity, live: State<Map<String, String>>, rest
         "note" -> {}
         "switch" -> Text(m.content, color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp))
         "summary" -> SummaryRow(m.content)
-        else -> ToolStep(m, live, onShare, onSave)
+        else -> ToolStep(m, live, onShare, onSave, onPreview)
     }
 }
 
@@ -385,7 +387,7 @@ private fun ErrorRow(text: String) {
 }
 
 @Composable
-private fun ToolStep(m: MessageEntity, live: State<Map<String, String>>, onShare: (Attachment) -> Unit, onSave: (Attachment) -> Unit) {
+private fun ToolStep(m: MessageEntity, live: State<Map<String, String>>, onShare: (Attachment) -> Unit, onSave: (Attachment) -> Unit, onPreview: (Attachment) -> Unit) {
     var open by remember { mutableStateOf(false) }
     val liveText = live.value[m.id]
     val running = liveText != null
@@ -414,9 +416,11 @@ private fun ToolStep(m: MessageEntity, live: State<Map<String, String>>, onShare
                 Spacer(Modifier.width(6.dp))
                 Text("${f.name}  -  ${Attachments.human(f.size)}", color = A.dim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             }
-            Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val canPreview = remember(f.path) { com.aura.agent.data.Previewable.kind(f.name, f.mime, runCatching { java.io.File(f.path).inputStream().use { ins -> ByteArray(4096).let { b -> b.copyOf(maxOf(ins.read(b), 0)) } } }.getOrDefault(ByteArray(0))) != null }
+            Row(Modifier.padding(top = 6.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (canPreview) PillButton("Preview", { onPreview(f) }, modifier = Modifier.testTag("file-preview"))
+                PillButton("Download", { onSave(f) }, primary = false, modifier = Modifier.testTag("file-save"))
                 PillButton("Share", { onShare(f) }, primary = false, modifier = Modifier.testTag("file-share"))
-                PillButton("Save to phone", { onSave(f) }, primary = false, modifier = Modifier.testTag("file-save"))
             }
         }
         if (expanded) {

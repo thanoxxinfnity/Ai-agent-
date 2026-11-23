@@ -28,7 +28,7 @@ class AttachmentsAndReposTest {
         app.store.upsertProvider(Provider("p", "T", m.server.url("/v1").toString().trimEnd('/'), "k", wire = wire, models = listOf("m"), defaultModel = "m"))
         app.store.select("p", "m")
         app.store.setGithub("gho_x", "octo")
-        app.store.setGuardrails(true)
+        app.store.setGuardrails(true); app.extras.setAskBeforePush(false)
         app.runner.alwaysApprove.clear()
         return app
     }

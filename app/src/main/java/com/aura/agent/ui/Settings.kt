@@ -391,7 +391,7 @@ fun SettingsScreen(vm: MainVM) {
     Column(Modifier.fillMaxSize().background(A.bg).statusBarsPadding().navigationBarsPadding().imePadding()) {
         SkillDialogs(vm, skillDialog, { skillDialog = null }, skillNew, { skillNew = false }, importOpen, { importOpen = false })
         TopBar("Settings", { vm.go(Route.Chat) })
-        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 40.dp)) {
+        LazyColumn(Modifier.weight(1f).testTag("settings-list"), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 40.dp)) {
             item {
                 Section("Model providers") {
                     providers.forEach { p ->
@@ -421,9 +421,11 @@ fun SettingsScreen(vm: MainVM) {
                 }
             }
             item { Section("GitHub") { GithubSignIn(vm) } }
+            item { Section("Pushing to GitHub") { PushConsentSection(vm) } }
             item { Section("GitHub Codespace Token (PAT)") { CodespaceToken(vm) } }
             item { Section("Vercel (deploy websites)") { VercelSection(vm) } }
             item { Section("Free providers (no API key)") { FreeProvidersSection(vm) } }
+            item { Section("API keys (hidden from the AI)") { VaultSection(vm) } }
             item { Section("MCP servers") { McpEntry(vm) } }
             item { Section("Phone folders") { FoldersSection(vm) } }
             item { Section("Answers") { LongAnswersSection(vm) } }

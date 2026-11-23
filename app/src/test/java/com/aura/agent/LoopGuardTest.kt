@@ -24,7 +24,7 @@ class LoopGuardTest {
         app.store.upsertProvider(Provider("p", "T", m.server.url("/v1").toString().trimEnd('/'), "k", models = listOf("m"), defaultModel = "m"))
         app.store.select("p", "m")
         app.store.setGithub("gho_x", "octo")
-        app.store.setGuardrails(true); app.store.setContextTokens(128_000)
+        app.store.setGuardrails(true); app.extras.setAskBeforePush(false); app.store.setContextTokens(128_000)
         return app
     }
 

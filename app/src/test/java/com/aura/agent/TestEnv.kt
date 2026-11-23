@@ -30,7 +30,7 @@ object Env {
         app.store.providers.value.forEach { app.store.deleteProvider(it.id) }
         app.store.upsertProvider(Provider("p", "T", "$base/v1", "k", wire = wire, models = listOf("m"), defaultModel = "m"))
         app.store.select("p", "m"); app.store.setAuto(false); app.store.setThinkMode(ThinkMode.STEADY)
-        app.store.setGithub("gho_x", "octo"); app.store.setGuardrails(true); app.runner.alwaysApprove.clear()
+        app.store.setGithub("gho_x", "octo"); app.store.setGuardrails(true); app.extras.setAskBeforePush(false); app.runner.alwaysApprove.clear()
         app.store.setPinnedRepo(""); app.store.lastRepo = ""; app.store.setRememberLastRepo(true)
         runBlocking { app.db.dao().memoriesOnce().forEach { app.db.dao().deleteMemory(it.key) } }
         Web.config = WebConfig(

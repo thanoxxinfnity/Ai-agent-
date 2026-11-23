@@ -132,7 +132,7 @@ class VercelAgentTest {
         app.store.providers.value.forEach { app.store.deleteProvider(it.id) }
         app.store.upsertProvider(Provider("p", "T", "$base/v1", "k", models = listOf("m"), defaultModel = "m"))
         app.store.select("p", "m"); app.store.setThinkMode(ThinkMode.STEADY)
-        app.store.setGithub("gho_x", "octo"); app.store.setGuardrails(true); app.runner.alwaysApprove.clear()
+        app.store.setGithub("gho_x", "octo"); app.store.setGuardrails(true); app.extras.setAskBeforePush(false); app.runner.alwaysApprove.clear()
         app.store.setVercel(if (vercel) "vercel_tok_123" else "", if (vercel) "vercel-user" else "", "")
         m.tarball = tarGz(
             "repo-1/package.json" to "{}", "repo-1/public/index.html" to "<h1>Hello</h1>", "repo-1/public/style.css" to "h1{color:red}",

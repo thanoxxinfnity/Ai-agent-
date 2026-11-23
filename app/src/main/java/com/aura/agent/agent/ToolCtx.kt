@@ -17,6 +17,9 @@ class RunState {
     @Volatile var errorStreak = 0
     @Volatile var ciFailures = 0
     @Volatile var deployFailures = 0
+    /** the user already said yes (or no) to GitHub pushes during this run, so they are not asked again */
+    @Volatile var pushAllowed = false
+    @Volatile var pushDenied = false
     val snapshotted = java.util.Collections.synchronizedSet(HashSet<String>())
 
     fun markModified() { modified = true; verified = false }
@@ -46,6 +49,27 @@ class ToolCtx(
     val produced = java.util.concurrent.CopyOnWriteArrayList<com.aura.agent.data.Attachment>()
 
     val store: Store get() = app.store
+
+    /**
+     * GitHub only receives what the user agreed to. Returns null when the push may go ahead, or the message to give the model
+     * (which tells it to keep the work on the phone instead).
+     */
+    suspend fun confirmGithubPush(what: String, detail: String = ""): String? {
+        if (!app.extras.askBeforePush.value || state.pushAllowed) return null
+        if (state.pushDenied) return PUSH_DENIED
+        if (!approve("Push to GitHub?", (what + "\n" + detail).trim() + "\n\nAllow to put this on GitHub, or deny to keep everything on your phone.")) {
+            state.pushDenied = true
+            return PUSH_DENIED
+        }
+        state.pushAllowed = true
+        return null
+    }
+
+    companion object {
+        const val PUSH_DENIED = "DENIED: the user does not want this on GitHub, so nothing was pushed. Do not try to push again in this chat unless they ask. " +
+            "Keep the work on the phone instead: send_file shows a file in the chat with preview and download, and folder_write saves into a connected phone folder. " +
+            "Tell the user where the files are, in their own language."
+    }
 
     /** Working directory in the codespace: the active repo (cloned on first use) or the workspace root. */
     suspend fun workDir(c: com.aura.agent.net.CloudClient): String {

@@ -22,6 +22,21 @@ data class LocalFolder(
     val enabled: Boolean = true,
 )
 
+/** One API key in the hidden key box. The model only ever sees [name] and [baseUrl]; [key] is used by the app alone. */
+@Serializable
+data class VaultKey(
+    val id: String,
+    /** lower-case name the model uses, e.g. "vercel" */
+    val name: String,
+    /** the only address this key may be sent to, e.g. https://api.vercel.com */
+    val baseUrl: String,
+    val key: String,
+    /** bearer, header, basic or query */
+    val style: String = "bearer",
+    /** header name (style header) or query parameter (style query) */
+    val param: String = "",
+)
+
 /**
  * Settings added with MCP, phone folders and answer length. Kept in encrypted storage on the device; MCP headers can hold
  * tokens, so nothing here is ever sent anywhere except to the MCP server the user chose.
@@ -43,6 +58,12 @@ class Extras(ctx: Context) {
     val longAnswers: StateFlow<Boolean> = _longAnswers.asStateFlow()
     fun setLongAnswers(on: Boolean) { _longAnswers.value = on; prefs.edit().putBoolean("longAnswers", on).apply() }
 
+    // ---- GitHub pushes ----
+    private val _askPush = MutableStateFlow(prefs.getBoolean("askBeforePush", true))
+    /** on (default): the agent must get a yes before anything is pushed to GitHub */
+    val askBeforePush: StateFlow<Boolean> = _askPush.asStateFlow()
+    fun setAskBeforePush(on: Boolean) { _askPush.value = on; prefs.edit().putBoolean("askBeforePush", on).apply() }
+
     // ---- MCP servers ----
     private val _mcp = MutableStateFlow(
         runCatching { AppJson.decodeFromString<List<McpServer>>(prefs.getString("mcpServers", "[]") ?: "[]") }.getOrDefault(emptyList())
@@ -52,6 +73,22 @@ class Extras(ctx: Context) {
     fun upsertMcp(s: McpServer) { val cur = _mcp.value; saveMcp(if (cur.any { it.id == s.id }) cur.map { if (it.id == s.id) s else it } else cur + s) }
     fun removeMcp(id: String) = saveMcp(_mcp.value.filterNot { it.id == id })
     fun setMcpEnabled(id: String, on: Boolean) = saveMcp(_mcp.value.map { if (it.id == id) it.copy(enabled = on) else it })
+
+    // ---- hidden API keys ----
+    private val _vault = MutableStateFlow(
+        runCatching { AppJson.decodeFromString<List<VaultKey>>(prefs.getString("vault", "[]") ?: "[]") }.getOrDefault(emptyList())
+    )
+    val vault: StateFlow<List<VaultKey>> = _vault.asStateFlow()
+    private fun saveVault(list: List<VaultKey>) { _vault.value = list; prefs.edit().putString("vault", AppJson.encodeToString(list)).apply() }
+    fun vaultName(raw: String) = raw.trim().lowercase().replace(Regex("[^a-z0-9_-]+"), "-").trim('-').take(32)
+    /** Adds or replaces a key by id. An empty key keeps the one already stored (editing a key without retyping it). */
+    fun upsertVault(k: VaultKey) {
+        val cur = _vault.value
+        val old = cur.firstOrNull { it.id == k.id }
+        val next = k.copy(name = vaultName(k.name), key = k.key.ifBlank { old?.key.orEmpty() })
+        saveVault(if (old != null) cur.map { if (it.id == k.id) next else it } else cur + next)
+    }
+    fun removeVault(id: String) = saveVault(_vault.value.filterNot { it.id == id })
 
     // ---- phone folders ----
     private val _folders = MutableStateFlow(
