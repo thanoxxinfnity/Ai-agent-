@@ -162,7 +162,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
             try {
                 if (store.githubClientId.value.isBlank()) a.supabase.loadConfig()
                 val id = store.githubClientId.value
-                if (id.isBlank()) error("GitHub sign in is not configured yet. Enter an OAuth App Client ID in Settings.")
+                if (id.isBlank()) error("GitHub sign in is not available right now. Check your internet connection and try again.")
                 val d = com.aura.agent.net.GhOAuth.start(id)
                 device.value = d
                 val token = com.aura.agent.net.GhOAuth.poll(id, d)

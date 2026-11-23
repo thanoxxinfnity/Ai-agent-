@@ -117,8 +117,6 @@ fun GithubSignIn(vm: MainVM) {
     val user by vm.store.githubUser.collectAsState()
     val device by vm.device.collectAsState()
     val msg by vm.loginMsg.collectAsState()
-    val clientId by vm.store.githubClientId.collectAsState()
-    var custom by remember { mutableStateOf(false) }
     when {
         token.isNotBlank() -> Row(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(A.surface).border(1.dp, A.border, RoundedCornerShape(16.dp)).padding(16.dp),
@@ -136,69 +134,8 @@ fun GithubSignIn(vm: MainVM) {
         else -> Column {
             GithubButton { vm.startGithubLogin() }
             if (msg.isNotBlank()) Text(msg, color = A.danger, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
-            Text(
-                if (custom) "Hide custom Client ID" else "Use my own OAuth App", color = A.dim, fontSize = 13.sp,
-                modifier = Modifier.padding(top = 14.dp).clickable { custom = !custom },
-            )
-            if (custom) {
-                Spacer(Modifier.height(8.dp))
-                Field("OAuth App Client ID", clientId, { vm.store.setGithubClientId(it) }, placeholder = "Ov23li...", mono = true)
-            }
         }
     }
-}
-
-@Composable
-fun CodespaceToken(vm: MainVM) {
-    val scope = rememberCoroutineScope()
-    val pat by vm.store.codespacePat.collectAsState()
-    val user by vm.store.codespaceUser.collectAsState()
-    var input by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf("") }
-    if (pat.isNotBlank()) {
-        Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(A.surface).border(1.dp, A.border, RoundedCornerShape(16.dp)).padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            AIcon(R.drawable.ic_cloud, tint = A.accent)
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Row(
-                        Modifier.clip(CircleShape).background(A.ok.copy(alpha = 0.15f)).padding(horizontal = 10.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        AIcon(R.drawable.ic_check, tint = A.ok, size = 14.dp)
-                        Spacer(Modifier.width(4.dp))
-                        Text("Connected", color = A.ok, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                    }
-                }
-                Text(user.ifBlank { "GitHub account" }, color = A.dim, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
-            }
-            PillButton("Remove", { vm.removeCodespace() }, primary = false, danger = true)
-        }
-    } else {
-        Field("Codespace token", input, { input = it; error = "" }, placeholder = "ghp_...", secret = true, mono = true)
-        Spacer(Modifier.height(10.dp))
-        Text(
-            "GitHub Settings -> Developer Settings -> Personal Access Tokens (Classic) mein jaakar sirf `codespace` aur `repo` permission wala token banayein aur yahan paste karein.",
-            color = A.dim, fontSize = 13.sp, lineHeight = 19.sp,
-        )
-        Spacer(Modifier.height(12.dp))
-        PillButton("Save and verify", {
-            busy = true; error = ""
-            scope.launch {
-                vm.connectCodespace(input).onSuccess { input = "" }.onFailure { error = it.message ?: "Could not verify this token" }
-                busy = false
-            }
-        }, enabled = input.isNotBlank(), loading = busy)
-        if (error.isNotBlank()) Text(error, color = A.danger, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 8.dp))
-    }
-    Text(
-        "Your token is stored only on this device (encrypted) and is never uploaded. It is used to run heavy tasks and a headless browser in your own Codespace, which is stopped automatically after every task.",
-        color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 12.dp),
-    )
 }
 
 @Composable
