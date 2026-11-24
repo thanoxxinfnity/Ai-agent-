@@ -217,7 +217,7 @@ object Llm {
                     if (!resp.isSuccessful) {
                         val code = resp.code
                         val errBody = resp.body?.string().orEmpty()
-                        val hinted = resp.header("Retry-After")?.toLongOrNull() ?: parseRetryDelay(errBody)
+                        val hinted = retryAfterSeconds(resp.header("Retry-After")) ?: parseRetryDelay(errBody)
                         if (code == 400 && useEffort && looksLikeReasoningRejection(errBody)) {
                             // this model or host does not take a reasoning level: remember it and ask again without
                             noEffort += effortKey; useEffort = false; req = makeReq(); waitMs = 0
@@ -227,7 +227,7 @@ object Llm {
                             flipped = true; responses = !responses; req = makeReq(); waitMs = 0
                             null
                         } else if (code in RETRYABLE && attempt < maxRetries) {
-                            waitMs = if (hinted != null) hinted * 1000 else backoffBaseMs shl attempt
+                            waitMs = if (hinted != null) hinted * 1000 else jitter(backoffBaseMs shl attempt)
                             attempt++
                             null
                         } else throw LlmError(friendly(code, errBody), code, hinted)
@@ -239,7 +239,7 @@ object Llm {
                 if (!job.isActive) throw kotlinx.coroutines.CancellationException("cancelled")
                 // a dropped connection before any text arrived is retried like a 5xx; a drop mid-answer is not
                 if (emitted || attempt >= maxRetries) throw LlmError("Could not reach the provider (network problem or timeout). Check the connection and try again.", 0)
-                waitMs = backoffBaseMs shl attempt
+                waitMs = jitter(backoffBaseMs shl attempt)
                 attempt++
             } finally {
                 handle.dispose()
@@ -253,6 +253,17 @@ object Llm {
     }
 
     /** Seconds the provider asks us to wait ("retry in 17.2s", "retryDelay":"17s"). */
+    /** Retry-After is either seconds or an HTTP date; capped so a bad value cannot freeze the app. */
+    fun retryAfterSeconds(h: String?): Long? {
+        val v = h?.trim().orEmpty(); if (v.isEmpty()) return null
+        v.toLongOrNull()?.let { return it.coerceIn(0, 120) }
+        val t = runCatching { java.time.ZonedDateTime.parse(v, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli() }.getOrNull() ?: return null
+        return Math.ceil((t - System.currentTimeMillis()) / 1000.0).toLong().coerceIn(0, 120)
+    }
+
+    /** +0..25% random spread so parallel chats do not retry in the same instant (small waits, as in tests, stay unchanged). */
+    private fun jitter(ms: Long) = if (ms < 1000) ms else ms + (Math.random() * ms * 0.25).toLong()
+
     fun parseRetryDelay(body: String): Long? {
         Regex("retry in ([0-9.]+)\\s*s", RegexOption.IGNORE_CASE).find(body)?.let { return Math.ceil(it.groupValues[1].toDouble()).toLong() }
         Regex("\"retryDelay\"\\s*:\\s*\"([0-9.]+)s\"").find(body)?.let { return Math.ceil(it.groupValues[1].toDouble()).toLong() }

@@ -299,7 +299,15 @@ class AgentRunner(private val app: App) {
         val toolCtx = mk(emit)
         val result = try {
             if (seen > 3) "ERROR: LOOP_DETECTED: you already made this exact call $seen times. Do something different or ask the user."
-            else Tools.execute(toolCtx, c.name, c.args)
+            else if (c.name in ToolsPro.READ_ONLY && c.name !in LOOP_EXEMPT) {
+                // the same read-only call a moment ago: reuse its answer instead of asking the network again
+                val key = chatId + "|" + sig; val now = System.currentTimeMillis()
+                val hit = recentReads[key]?.takeIf { now - it.first < READ_REUSE_MS && !it.second.startsWith("ERROR") }
+                if (hit != null) hit.second else Tools.execute(toolCtx, c.name, c.args).also {
+                    recentReads[key] = now to it
+                    if (recentReads.size > 200) recentReads.entries.removeIf { e -> now - e.value.first > READ_REUSE_MS }
+                }
+            } else { recentReads.clear(); Tools.execute(toolCtx, c.name, c.args) }   // anything that may change state forgets the reused reads
         } catch (e: CancellationException) {
             withContext(NonCancellable) {
                 dao.upsertMessage(placeholder.copy(content = "Stopped by the user before this finished.", isError = true))
@@ -484,7 +492,10 @@ class AgentRunner(private val app: App) {
         dao.setTitle(chatId, title, true)
     }
 
+    private val recentReads = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, String>>()
+
     companion object {
+        const val READ_REUSE_MS = 5_000L
         val LOOP_EXEMPT = setOf("verify_project", "github_wait_run", "github_list_runs", "github_run_logs", "playwright_call", "agent_browser", "cloud_exec")
         const val HISTORY_LIMIT = 120
 

@@ -90,3 +90,13 @@ class RetryTest {
         assertEquals("a POST is never repeated", 1, m.log.count { it == "POST /gh/user/repos" })
     }
 }
+
+class RetryAfterTest {
+    @org.junit.Test fun seconds_dates_and_junk_are_understood_and_capped() {
+        org.junit.Assert.assertEquals(7L, com.aura.agent.net.Llm.retryAfterSeconds("7"))
+        org.junit.Assert.assertEquals(120L, com.aura.agent.net.Llm.retryAfterSeconds("99999"))
+        org.junit.Assert.assertNull(com.aura.agent.net.Llm.retryAfterSeconds("soon")); org.junit.Assert.assertNull(com.aura.agent.net.Llm.retryAfterSeconds(null))
+        val d = java.time.ZonedDateTime.now(java.time.ZoneOffset.UTC).plusSeconds(30).format(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)
+        val v = com.aura.agent.net.Llm.retryAfterSeconds(d)!!; org.junit.Assert.assertTrue("$v", v in 28..31)
+    }
+}
