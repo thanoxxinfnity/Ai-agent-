@@ -395,6 +395,30 @@ object Tools {
         return "Run $id is still running after 6 minutes. Call github_wait_run again."
     }
 
+    /**
+     * A CI log ends with cache and daemon warnings, so the tail alone hides the compile error. The digest pulls out the error lines
+     * (compiler errors, "What went wrong", missing resources ...) with a little context, then adds a shorter tail.
+     */
+    object LogDigest {
+        private val stamp = Regex("""^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s?""")
+        private val hit = Regex("""(?i)(^e: |\berror:|\bFAILURE:|What went wrong|Execution failed|Unresolved reference|AAPT|resource .* not found|Could not (resolve|find|determine)|\bFAILED\b|Compilation error|Duplicate class|Manifest merger|Caused by:|Exception in|npm ERR!|##\[error\])""")
+        private val noise = Regex("""(?i)(gradle.*cache|daemon|configuration cache|deprecat|build scan|you can use|--warning-mode|welcome to gradle)""")
+
+        fun digest(raw: String, tail: Int = 1500, maxErrors: Int = 40): String {
+            val lines = raw.lineSequence().map { stamp.replace(it, "").trimEnd() }.toList()
+            val picked = LinkedHashSet<Int>()
+            lines.forEachIndexed { i, l ->
+                if (hit.containsMatchIn(l) && !(noise.containsMatchIn(l) && !l.contains("error", true))) {
+                    picked += i
+                    if (l.contains("What went wrong")) { for (k in 1..3) if (i + k < lines.size) picked += i + k }
+                }
+            }
+            val errs = picked.sorted().take(maxErrors).joinToString("\n") { lines[it].take(300) }
+            val last = raw.takeLast(tail)
+            return if (errs.isBlank()) "(no error line found; end of the log)\n$last" else "Error lines (first ${minOf(picked.size, maxErrors)} of ${picked.size}):\n$errs\n\n--- end of the log ---\n$last"
+        }
+    }
+
     private suspend fun runLogs(gh: GitHub, repo: String, id: Long): String {
         val jobs = (gh.call("GET", "/repos/$repo/actions/runs/$id/jobs").o()["jobs"] as JsonArray)
         val out = StringBuilder()
@@ -404,7 +428,7 @@ object Tools {
             val failed = (jo["steps"] as? JsonArray)?.filter { it.s("conclusion") == "failure" }?.joinToString { it.s("name").orEmpty() }
             out.append("Job ${jo.s("name")} failed at step: $failed\n")
             val log = runCatching { gh.raw("/repos/$repo/actions/jobs/${jo["id"]}/logs") }.getOrDefault("")
-            out.append(log.takeLast(3500)).append("\n\n")
+            out.append(LogDigest.digest(log)).append("\n\n")
         }
         return out.toString().ifBlank { "No failed jobs for run $id" }
     }
