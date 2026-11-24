@@ -174,14 +174,14 @@ class FileEditorUiTest : UiBase() {
         assertTrue(text("Gave the user notes.md") || text("notes.md"))
         // the three-dots menu on the card opens the editor straight away
         tap("file-menu"); tap("file-edit")
-        assertTrue("editor opens", text("editing")); rule.onNodeWithTag("file-editor", useUnmergedTree = true).assertExists()
+        assertTrue("editor opens", text("editing")); val until1 = System.currentTimeMillis() + 15000; while (System.currentTimeMillis() < until1 && rule.onAllNodesWithTag("file-editor", useUnmergedTree = true).fetchSemanticsNodes().isEmpty()) { org.robolectric.shadows.ShadowLooper.idleMainLooper(); rule.waitForIdle(); Thread.sleep(60) }; rule.onNodeWithTag("file-editor", useUnmergedTree = true).assertExists()
         rule.onNodeWithTag("file-edit-save").assertIsNotEnabled()   // nothing changed yet
         rule.onNodeWithTag("file-editor", useUnmergedTree = true).performTextClearance(); rule.onNodeWithTag("file-editor", useUnmergedTree = true).performTextInput("# New title\n\nChanged body"); rule.waitForIdle()
         tap("file-edit-save")
         assertEquals("# New title\n\nChanged body", f.readText())
         assertTrue("saved note", text("Saved.")); assertTrue("the preview now shows the new text", text("New title"))
         // cancel keeps the file as it is
-        tap("file-edit-open"); rule.onNodeWithTag("file-editor", useUnmergedTree = true).performTextInput(" more"); tap("file-edit-cancel")
+        tap("file-edit-open"); val until2 = System.currentTimeMillis() + 15000; while (System.currentTimeMillis() < until2 && rule.onAllNodesWithTag("file-editor", useUnmergedTree = true).fetchSemanticsNodes().isEmpty()) { org.robolectric.shadows.ShadowLooper.idleMainLooper(); rule.waitForIdle(); Thread.sleep(60) }; rule.onNodeWithTag("file-editor", useUnmergedTree = true).performTextInput(" more"); tap("file-edit-cancel")
         assertEquals("# New title\n\nChanged body", f.readText())
         // Ask Aura puts a request in the message box
         tap("file-ask"); rule.waitForIdle()

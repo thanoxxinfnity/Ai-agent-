@@ -420,7 +420,7 @@ fun SettingsScreen(vm: MainVM) {
                             Column(Modifier.weight(1f)) {
                                 Text(p.name, color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
                                 Text(
-                                    "${p.models.size} models  -  ${if (p.wire == "responses") "Responses API" else "Chat API"}",
+                                    "${p.models.size} models  -  ${when (p.wire) { "responses" -> "Responses API"; "anthropic" -> "Anthropic Messages"; "gemini" -> "Gemini API"; "auto" -> "Auto format"; else -> "Chat API" }}",
                                     color = A.dim, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 )
                             }
@@ -630,6 +630,7 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
         rpm = rpm.toIntOrNull()?.coerceIn(0, 100000) ?: 0, reasoning = reasoning, blocked = blockedMap, free = freeList.filter { it in models }, priced = priced, contexts = contextMap.filterKeys { it in models },
     )
     val built = remember { mutableStateOf<Provider?>(null) }
+    val badHeader = remember(headers) { com.aura.agent.net.Llm.headerProblem(headers) }
 
     val filtered = remember(models, query, priceFilter, freeList, blockedMap) { models.filter { (query.isBlank() || it.contains(query, true)) && (blockedMap[it] ?: com.aura.agent.net.ModelGuard.heuristic(it)) == null && when (priceFilter) { "free" -> it in freeList; "paid" -> it !in freeList; else -> true } } }
 
@@ -644,7 +645,14 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
             item {
                 Column {
                     Text("Request format", color = A.dim, fontSize = 12.sp, modifier = Modifier.padding(bottom = 6.dp, start = 2.dp))
-                    Segmented(listOf("chat" to "Chat completions", "responses" to "Responses"), wire) { wire = it }
+                    Segmented(listOf("auto" to "Auto", "chat" to "Chat", "responses" to "Resp.", "anthropic" to "Claude", "gemini" to "Gemini"), wire) { wire = it }
+                    Text(when (wire) {
+                        "chat" -> "OpenAI Chat Completions (/chat/completions): OpenAI, Groq, NVIDIA, OpenRouter, most gateways."
+                        "responses" -> "OpenAI Responses (/responses): newer OpenAI-style servers."
+                        "anthropic" -> "Anthropic Messages (/v1/messages), sent with an x-api-key header."
+                        "gemini" -> "Google Gemini native (generateContent), sent with an x-goog-api-key header."
+                        else -> "Auto picks the format from the address (Anthropic and Gemini hosts get their own format, everything else Chat) and switches between Chat and Responses by itself if the server asks for the other."
+                    }, color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 6.dp, start = 2.dp).testTag("wire-note"))
                 }
             }
             item { Field("Models URL (optional)", modelsUrl, { modelsUrl = it }, placeholder = "defaults to base URL + /models") }
@@ -656,7 +664,13 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
                 }
             }
             item { Field("Requests per minute limit (optional)", rpm, { rpm = it.filter { c -> c.isDigit() }.take(5) }, placeholder = "empty = automatic (Gemini 10, NVIDIA 30)") }
-            item { Field("Extra headers (one per line)", headers, { headers = it }, singleLine = false, minLines = 2, mono = true, placeholder = "x-header: value") }
+            item {
+                Column {
+                    Field("Custom headers (one per line)", headers, { headers = it }, singleLine = false, minLines = 2, mono = true, placeholder = "User-Agent: my-app/1.0\nanthropic-version: 2023-06-01", tag = "headers-field")
+                    Text("Sent with every request to this provider, on top of the usual ones, so a User-Agent or API version you set here wins. The API key header (Authorization, x-api-key, x-goog-api-key) can't be replaced while a key is set. Saved only on this phone.", color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 6.dp, start = 2.dp))
+                    badHeader?.let { Text(it, color = A.danger, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp, start = 2.dp).testTag("headers-error")) }
+                }
+            }
             item {
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -726,7 +740,7 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
                         vm.store.upsertProvider(p)
                         if (vm.store.activeProvider.value == p.id && p.defaultModel.isNotBlank() && vm.store.activeModel.value !in p.models) vm.store.select(p.id, p.defaultModel)
                         vm.go(Route.Settings)
-                    }, enabled = name.isNotBlank() && baseUrl.isNotBlank(), modifier = Modifier.weight(1f))
+                    }, enabled = name.isNotBlank() && baseUrl.isNotBlank() && badHeader == null, modifier = Modifier.weight(1f).testTag("save-provider"))
                     if (existing != null) PillButton("Delete", { vm.store.deleteProvider(existing.id); vm.go(Route.Settings) }, primary = false, danger = true)
                 }
             }

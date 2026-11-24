@@ -105,10 +105,42 @@ object Llm {
         }
     }
 
-    private fun Request.Builder.auth(p: Provider): Request.Builder {
-        if (p.apiKey.isNotBlank()) header("Authorization", "Bearer ${p.apiKey.trim()}")
-        p.headers.forEach { (k, v) -> header(k, v) }
+    /** Names the user's own headers may not replace while a key is set: they carry the key, so the key cannot be redirected or dropped. */
+    private val PROTECTED = setOf("authorization", "x-api-key", "x-goog-api-key", "api-key", "content-type", "content-length", "host")
+
+    /**
+     * Default headers for the format, then the user's own headers on top (a custom User-Agent or API version wins), then the key in
+     * the header this format uses. A header with bad characters is reported instead of crashing.
+     */
+    private fun Request.Builder.auth(p: Provider, fmt: String = WireBodies.detect(p)): Request.Builder {
+        val key = p.apiKey.trim()
+        if (fmt == WireBodies.ANTHROPIC) header("anthropic-version", "2023-06-01")
+        p.headers.forEach { (k, v) ->
+            val name = k.trim()
+            if (name.isEmpty() || (key.isNotEmpty() && name.lowercase() in PROTECTED)) return@forEach
+            try { header(name, v.trim()) } catch (e: IllegalArgumentException) {
+                throw LlmError("The header \"${name.take(40)}\" in this provider's settings is not valid (no spaces in names, no line breaks or special characters). Fix it in Settings.")
+            }
+        }
+        if (key.isNotEmpty()) when (fmt) {
+            WireBodies.ANTHROPIC -> header("x-api-key", key)
+            WireBodies.GEMINI -> header("x-goog-api-key", key)
+            else -> header("Authorization", "Bearer $key")
+        }
         return this
+    }
+
+    /** What is wrong with the custom-header text (one "Name: value" per line), or null. Checked in the editor so a bad line never reaches a request. */
+    fun headerProblem(text: String): String? {
+        text.lines().forEachIndexed { i, raw ->
+            val l = raw.trim(); if (l.isEmpty()) return@forEachIndexed
+            val parts = l.split(":", limit = 2)
+            if (parts.size < 2 || parts[0].isBlank()) return "Line ${i + 1}: write it as  Name: value"
+            val name = parts[0].trim(); val value = parts[1].trim()
+            if (!Regex("[!#$%&'*+.^_`|~0-9A-Za-z-]+").matches(name)) return "Line ${i + 1}: \"${name.take(30)}\" is not a valid header name (letters, digits and - only)"
+            if (value.any { it.code < 32 && it != '\t' || it.code > 126 }) return "Line ${i + 1}: the value has a character headers cannot carry (use plain English letters and digits)"
+        }
+        return null
     }
 
     private fun JsonElement?.str(): String? = (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull
@@ -146,8 +178,15 @@ object Llm {
 
     /** Model ids, the ids the provider calls free, and whether it said anything about price. */
     private suspend fun fetchModels(p: Provider): Fetched = withContext(Dispatchers.IO) {
-        val url = p.modelsUrl.ifBlank { p.baseUrl.trimEnd('/') + "/models" }
-        val req = Request.Builder().url(url).get().auth(p).build()
+        val fmt = WireBodies.detect(p)
+        val url = p.modelsUrl.ifBlank {
+            when (fmt) {
+                WireBodies.ANTHROPIC -> WireBodies.anthropicModelsUrl(p) + "?limit=1000"
+                WireBodies.GEMINI -> WireBodies.geminiUrl(p, "x").substringBefore("/models/") + "/models?pageSize=1000"
+                else -> p.baseUrl.trimEnd('/') + "/models"
+            }
+        }
+        val req = Request.Builder().url(url).get().auth(p, fmt).build()
         Http.client.newCall(req).execute().use { r ->
             val body = r.body?.string().orEmpty()
             if (!r.isSuccessful) throw LlmError("HTTP ${r.code}: ${body.take(300)}")
@@ -191,15 +230,21 @@ object Llm {
         onUsage: (Int) -> Unit = {},
     ): List<ToolCall> = withContext(Dispatchers.IO) {
         ModelGuard.reason(p, model)?.let { throw LlmError(ModelGuard.warning(p, model, it), 400) }
-        var responses = (learnedWire[wireKey(p)] ?: p.wire) == "responses"
+        var fmt = learnedWire[wireKey(p)]?.takeIf { it == WireBodies.CHAT || it == WireBodies.RESPONSES } ?: WireBodies.detect(p)
+        var responses = fmt == WireBodies.RESPONSES
+        val canFlip = fmt == WireBodies.CHAT || fmt == WireBodies.RESPONSES   // Anthropic and Gemini have no second style to fall back to
         var flipped = false
         val effortKey = p.id + "|" + model
         var useEffort = effort != null && supportsEffort(p) && effortKey !in noEffort
         fun makeReq(): Request {
             val e = if (useEffort) effort else null
-            val body = if (responses) responsesBody(model, system, msgs, tools, e) else chatBody(model, system, msgs, tools, e)
-            val url = p.baseUrl.trimEnd('/') + if (responses) "/responses" else "/chat/completions"
-            return Request.Builder().url(url).post(body.toString().toRequestBody(Http.JSON)).header("Accept", "text/event-stream").auth(p).build()
+            val (body, url) = when (fmt) {
+                WireBodies.ANTHROPIC -> WireBodies.anthropic(model, system, msgs, tools) to WireBodies.anthropicUrl(p)
+                WireBodies.GEMINI -> WireBodies.gemini(system, msgs, tools) to WireBodies.geminiUrl(p, model)
+                else -> if (responses) responsesBody(model, system, msgs, tools, e) to p.baseUrl.trimEnd('/') + "/responses"
+                        else chatBody(model, system, msgs, tools, e) to p.baseUrl.trimEnd('/') + "/chat/completions"
+            }
+            return Request.Builder().url(url).post(body.toString().toRequestBody(Http.JSON)).header("Accept", "text/event-stream").auth(p, fmt).build()
         }
         var req = makeReq()
         val job = coroutineContext[Job]!!
@@ -218,20 +263,20 @@ object Llm {
                         val code = resp.code
                         val errBody = resp.body?.string().orEmpty()
                         val hinted = retryAfterSeconds(resp.header("Retry-After")) ?: parseRetryDelay(errBody)
-                        if (code == 400 && useEffort && looksLikeReasoningRejection(errBody)) {
+                        if (code == 400 && useEffort && looksLikeReasoningRejection(errBody) && canFlip) {
                             // this model or host does not take a reasoning level: remember it and ask again without
                             noEffort += effortKey; useEffort = false; req = makeReq(); waitMs = 0
                             null
-                        } else if (!flipped && wantsOtherWire(responses, code, errBody)) {
+                        } else if (canFlip && !flipped && wantsOtherWire(responses, code, errBody)) {
                             // this server speaks the other API style: switch once and ask again right away
-                            flipped = true; responses = !responses; req = makeReq(); waitMs = 0
+                            flipped = true; responses = !responses; fmt = if (responses) WireBodies.RESPONSES else WireBodies.CHAT; req = makeReq(); waitMs = 0
                             null
                         } else if (code in RETRYABLE && attempt < maxRetries) {
                             waitMs = if (hinted != null) hinted * 1000 else jitter(backoffBaseMs shl attempt)
                             attempt++
                             null
                         } else throw LlmError(friendly(code, errBody), code, hinted)
-                    } else readResponse(resp, responses, guarded, onUsage).also {
+                    } else readResponse(resp, fmt, guarded, onUsage).also {
                         if (flipped) { val w = if (responses) "responses" else "chat"; learnedWire[wireKey(p)] = w; onWireLearned(p.id, w) }
                     }
                 }
@@ -300,7 +345,8 @@ object Llm {
         }
     }
 
-    private fun readResponse(resp: okhttp3.Response, responses: Boolean, onText: (String) -> Unit, onUsage: (Int) -> Unit = {}): List<ToolCall> {
+    /** Reads any answer: a stream of events or one JSON body, in OpenAI chat, OpenAI responses, Anthropic or Gemini shape. The shape is recognised from the data itself, the format only breaks ties. */
+    private fun readResponse(resp: okhttp3.Response, fmt: String, onText: (String) -> Unit, onUsage: (Int) -> Unit = {}): List<ToolCall> {
         val ct = resp.headers["Content-Type"].orEmpty()
         val acc = Acc(onText, onUsage)
         if (ct.contains("event-stream")) {
@@ -312,14 +358,24 @@ object Llm {
                 if (data == "[DONE]") break
                 if (data.isEmpty()) continue
                 val obj = runCatching { AppJsonLenient.parseToJsonElement(data) as? JsonObject }.getOrNull() ?: continue
-                if (responses) acc.responsesEvent(obj) else acc.chatChunk(obj)
+                acc.event(obj, fmt)
             }
         } else {
             val text = resp.body!!.string()
             if (text.isBlank()) throw IOException("empty response")   // connection dropped before the answer: retried like a network error
-            val obj = AppJsonLenient.parseToJsonElement(text) as? JsonObject
-                ?: throw LlmError("Unexpected response")
-            if (responses) acc.responsesFull(obj) else acc.chatChunk(obj)
+            val trimmed = text.trim()
+            // some servers send an event stream without saying so
+            if (trimmed.startsWith("data:") || trimmed.startsWith("event:")) {
+                trimmed.lineSequence().filter { it.startsWith("data:") }.map { it.substring(5).trim() }.filter { it.isNotEmpty() && it != "[DONE]" }.forEach { d ->
+                    (runCatching { AppJsonLenient.parseToJsonElement(d) as? JsonObject }.getOrNull())?.let { acc.event(it, fmt) }
+                }
+            } else {
+                val obj = runCatching { AppJsonLenient.parseToJsonElement(trimmed) as? JsonObject }.getOrNull()
+                    ?: throw LlmError(
+                        if (trimmed.startsWith("<")) "The server answered with a web page, not an AI reply (wrong address, a login or block page?). Check the Base URL. Start of it: ${trimmed.replace(Regex("\\s+"), " ").take(160)}"
+                        else "The server did not answer in a format Aura can read. Start of it: ${trimmed.replace(Regex("\\s+"), " ").take(160)}", resp.code)
+                acc.full(obj, fmt)
+            }
         }
         return acc.result()
     }
@@ -402,6 +458,8 @@ object Llm {
 
     // ---------- stream accumulation ----------
 
+    private val ANTHROPIC_EVENTS = setOf("message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop", "ping")
+
     private class Slot(var id: String = "", var name: String = "", val args: StringBuilder = StringBuilder())
 
     private class Acc(val onText: (String) -> Unit, val onUsage: (Int) -> Unit = {}) {
@@ -425,6 +483,77 @@ object Llm {
                 if (!id.isNullOrBlank()) s.id = id
                 if (!name.isNullOrBlank()) s.name = name
                 fn?.get("arguments").str()?.let { s.args.append(it) }
+            }
+        }
+
+        /** One streamed event in any known shape. */
+        fun event(obj: JsonObject, hint: String) {
+            val t = obj["type"].str().orEmpty()
+            when {
+                t.startsWith("response.") || (t == "error" && hint == WireBodies.RESPONSES) -> responsesEvent(obj)
+                t in ANTHROPIC_EVENTS -> anthropicEvent(obj)
+                "candidates" in obj || "usageMetadata" in obj || "promptFeedback" in obj -> geminiChunk(obj)
+                else -> chatChunk(obj)
+            }
+        }
+
+        /** One whole (not streamed) answer in any known shape. */
+        fun full(obj: JsonObject, hint: String) {
+            when {
+                obj["error"] != null && obj["choices"] == null -> chatChunk(obj)   // throws with the server's own message
+                "choices" in obj -> chatChunk(obj)
+                "output" in obj -> responsesFull(obj)
+                "candidates" in obj || "promptFeedback" in obj -> geminiChunk(obj)
+                obj["content"] is JsonArray -> anthropicFull(obj)
+                obj["type"].str() == "error" -> throw LlmError(((obj["error"] as? JsonObject)?.get("message")).str() ?: obj.toString().take(300))
+                else -> throw LlmError("The server answered, but not in a format Aura knows (hint: $hint). Start of it: ${obj.toString().take(160)}")
+            }
+        }
+
+        fun anthropicEvent(obj: JsonObject) {
+            when (obj["type"].str()) {
+                "message_start" -> (((obj["message"] as? JsonObject)?.get("usage") as? JsonObject)?.get("input_tokens") as? JsonPrimitive)?.intOrNull?.takeIf { it > 0 }?.let(onUsage)
+                "content_block_start" -> {
+                    val b = obj["content_block"] as? JsonObject ?: return
+                    val idx = (obj["index"] as? JsonPrimitive)?.intOrNull ?: slots.size
+                    when (b["type"].str()) {
+                        "tool_use" -> slots[idx] = Slot(b["id"].str().orEmpty(), b["name"].str().orEmpty())
+                        "text" -> b["text"].str()?.takeIf { it.isNotEmpty() }?.let(onText)
+                    }
+                }
+                "content_block_delta" -> {
+                    val d = obj["delta"] as? JsonObject ?: return
+                    val idx = (obj["index"] as? JsonPrimitive)?.intOrNull ?: 0
+                    when (d["type"].str()) {
+                        "text_delta" -> d["text"].str()?.takeIf { it.isNotEmpty() }?.let(onText)
+                        "input_json_delta" -> d["partial_json"].str()?.let { slots.getOrPut(idx) { Slot() }.args.append(it) }
+                    }
+                }
+                "error" -> throw LlmError(((obj["error"] as? JsonObject)?.get("message")).str() ?: obj.toString().take(300))
+            }
+        }
+
+        fun anthropicFull(obj: JsonObject) {
+            (((obj["usage"] as? JsonObject)?.get("input_tokens")) as? JsonPrimitive)?.intOrNull?.takeIf { it > 0 }?.let(onUsage)
+            (obj["content"] as? JsonArray)?.forEach { e ->
+                val b = e as? JsonObject ?: return@forEach
+                when (b["type"].str()) {
+                    "text" -> b["text"].str()?.takeIf { it.isNotEmpty() }?.let(onText)
+                    "tool_use" -> done += ToolCall(b["id"].str() ?: "call_${Ids.id().take(8)}", b["name"].str().orEmpty(), (b["input"] ?: JsonObject(emptyMap())).toString())
+                }
+            }
+        }
+
+        fun geminiChunk(obj: JsonObject) {
+            (obj["error"] as? JsonObject)?.let { throw LlmError(it["message"].str() ?: it.toString().take(300)) }
+            (((obj["usageMetadata"] as? JsonObject)?.get("promptTokenCount")) as? JsonPrimitive)?.intOrNull?.takeIf { it > 0 }?.let(onUsage)
+            (obj["promptFeedback"] as? JsonObject)?.get("blockReason").str()?.let { throw LlmError("Gemini blocked this request ($it).") }
+            val cand = (obj["candidates"] as? JsonArray)?.firstOrNull() as? JsonObject ?: return
+            ((cand["content"] as? JsonObject)?.get("parts") as? JsonArray)?.forEach { e ->
+                val part = e as? JsonObject ?: return@forEach
+                if ((part["thought"] as? JsonPrimitive)?.booleanOrNull == true) return@forEach   // the model's private reasoning summary
+                part["text"].str()?.takeIf { it.isNotEmpty() }?.let(onText)
+                (part["functionCall"] as? JsonObject)?.let { fc -> done += ToolCall("call_${Ids.id().take(8)}", fc["name"].str().orEmpty(), (fc["args"] ?: JsonObject(emptyMap())).toString()) }
             }
         }
 
@@ -465,7 +594,7 @@ object Llm {
 
         fun result(): List<ToolCall> {
             val fromSlots = slots.values.filter { it.name.isNotBlank() }.map {
-                ToolCall(it.id.ifBlank { "call_${Ids.id().take(8)}" }, it.name, it.args.toString())
+                ToolCall(it.id.ifBlank { "call_${Ids.id().take(8)}" }, it.name, it.args.toString().ifBlank { "{}" })
             }
             return (fromSlots + done).filter { it.name.isNotBlank() }
         }
