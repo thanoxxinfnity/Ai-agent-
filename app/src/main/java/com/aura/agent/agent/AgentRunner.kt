@@ -333,6 +333,7 @@ class AgentRunner(private val app: App) {
         status.value = "Thinking"
         runCatching { app.mcp.ensureConnected() }   // brings the MCP servers the user switched on up; failures only show in Settings
         val llm = toLlm(dao.messagesOnce(chatId))
+        val sentCount = dao.messagesOnce(chatId).count { it.role != "switch" && !it.compacted }
         val id = Ids.id()
         onId(id)
         val placeholder = MessageEntity(id, chatId, "assistant", "", Ids.now())
@@ -345,6 +346,7 @@ class AgentRunner(private val app: App) {
                 LlmRouter.Hooks(
                     onSwitch = { msg -> dao.upsertMessage(MessageEntity(Ids.id(), chatId, "switch", msg, placeholder.createdAt - 1)) },
                     onWait = { sec -> status.value = "Rate limited, retrying in ${sec}s" },
+                    onUsage = { t -> realUsage.update { it + (chatId to ContextMeter.Real(t, sentCount)) } },
                 ),
                 effort = store.thinkMode.value.effort,
             ) { chunk ->
@@ -374,6 +376,9 @@ class AgentRunner(private val app: App) {
     /** When the history reaches ~75% of the context window, older turns are folded into one summary message. */
     private val lastCompact = ConcurrentHashMap<String, Long>()
 
+    /** the provider's own prompt-token count for the last request of each chat (not kept across restarts) */
+    val realUsage = MutableStateFlow<Map<String, ContextMeter.Real>>(emptyMap())
+
     suspend fun maybeCompact(chatId: String, force: Boolean) {
         if (store.current() == null && !(store.autoMode.value && store.candidates().isNotEmpty())) return
         val active = dao.messagesOnce(chatId).filter { !it.compacted }
@@ -382,6 +387,7 @@ class AgentRunner(private val app: App) {
         // never compact over and over: one summary request is enough per couple of minutes unless the model says the prompt is too long
         if (!force && System.currentTimeMillis() - (lastCompact[chatId] ?: 0L) < 120_000L) return
         lastCompact[chatId] = System.currentTimeMillis()
+        realUsage.update { it - chatId }   // the history is about to shrink, so the old count no longer fits
         val cut = Compact.cut(active.map { it.role }, if (force) 4 else 8)
         if (cut <= 0) return
         val old = active.subList(0, cut)

@@ -21,6 +21,7 @@ sealed interface Route {
     data object Memory : Route
     data object Mcp : Route
     data object McpBrowse : Route
+    data object Browse : Route
     data class Provider(val id: String?, val preset: String? = null) : Route
 }
 
@@ -339,7 +340,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         val list = com.aura.agent.net.FreeCatalog.models(e)
         val old = com.aura.agent.net.FreeCatalog.connected(e, store.providers.value)
         val p = (old ?: Provider(id = Ids.id(), name = e.name, baseUrl = e.baseUrl, modelsUrl = e.modelsUrl))
-            .copy(models = list.models, blocked = list.blocked, free = list.models, priced = true, defaultModel = list.models.first())
+            .copy(models = list.models, blocked = list.blocked, free = list.models, priced = true, contexts = list.contexts, defaultModel = list.models.first())
         store.upsertProvider(p)
         if (store.activeProvider.value != p.id) store.select(p.id, p.defaultModel)
         "${list.models.size} free models connected"
@@ -362,9 +363,72 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     fun removeMcp(id: String) { extras.removeMcp(id); mcp.forget(id) }
 
     // ---- phone folders ----
+    /** Connects a folder picked in the file manager and checks it can really be opened. Returns a message for the user. */
     fun addFolder(uri: Uri): String {
         runCatching { app.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
-        return extras.addFolder(com.aura.agent.agent.FolderAccess.displayName(uri), uri.toString()).name
+        val f = extras.addFolder(com.aura.agent.agent.FolderAccess.displayName(uri), uri.toString())
+        val readable = runCatching { com.aura.agent.agent.FolderAccess.open(app, f).list("") != null }.getOrDefault(false)
+        if (!readable) {
+            extras.removeFolder(f.id)
+            return "Android does not let Aura open that folder (the Downloads folder and the top of the storage are blocked). Make a new folder with the file manager and pick that one."
+        }
+        return "Connected ${f.name}."
+    }
+
+    // ---- folder browser ----
+    val browseFolder = MutableStateFlow<com.aura.agent.data.LocalFolder?>(null)
+    val browsePath = MutableStateFlow("")
+    val browseEntries = MutableStateFlow<List<com.aura.agent.agent.FolderEntry>?>(null)
+    val browseError = MutableStateFlow("")
+    private var browseOrigin: Pair<com.aura.agent.data.LocalFolder, String>? = null
+
+    fun openFolder(f: com.aura.agent.data.LocalFolder) { browseFolder.value = f; browsePath.value = ""; route.value = Route.Browse; loadBrowse() }
+    fun browseInto(name: String) { browsePath.value = (browsePath.value + "/" + name).trim('/'); loadBrowse() }
+    /** One level up; false when already at the top (the caller then leaves the browser). */
+    fun browseUp(): Boolean { if (browsePath.value.isBlank()) return false; browsePath.value = browsePath.value.substringBeforeLast('/', ""); loadBrowse(); return true }
+    fun loadBrowse() {
+        val f = browseFolder.value ?: return
+        val path = browsePath.value
+        browseEntries.value = null; browseError.value = ""
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val list = com.aura.agent.agent.FolderAccess.open(a, f).list(path)
+                if (list == null) browseError.value = "This folder cannot be opened any more. Remove it and add it again."
+                browseEntries.value = list.orEmpty().sortedWith(compareByDescending<com.aura.agent.agent.FolderEntry> { it.isDir }.thenBy { it.name.lowercase() })
+            } catch (e: Exception) {
+                browseError.value = if (e is SecurityException) "Aura lost access to this folder. Remove it and add it again." else (e.message ?: "Could not read this folder.")
+                browseEntries.value = emptyList()
+            }
+        }
+    }
+
+    /** Opens a file of the browsed folder in the viewer: a copy goes to the app's cache (up to 25 MB), so the original is never touched until you save an edit. */
+    fun openBrowseFile(name: String) {
+        val f = browseFolder.value ?: return
+        val rel = (browsePath.value + "/" + name).trim('/')
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val bytes = com.aura.agent.agent.FolderAccess.open(a, f).read(rel, 25 * 1024 * 1024)
+                if (bytes == null) { browseError.value = "$name is not there any more."; return@launch }
+                if (bytes.size > 25 * 1024 * 1024) { browseError.value = "$name is bigger than 25 MB; open it with another app."; return@launch }
+                val dir = java.io.File(a.filesDir, "generated/browse").also { it.mkdirs() }
+                val out = java.io.File(dir, com.aura.agent.data.ImageFiles.safeName(name)).also { it.writeBytes(bytes) }
+                browseOrigin = f to rel
+                val mime = com.aura.agent.agent.AndroidActions.mimeOf(out)
+                openPreview(Attachment(out.name, mime, out.length(), out.absolutePath, if (mime.startsWith("image/")) "image" else "file"))
+            } catch (e: Exception) { browseError.value = e.message ?: "Could not open $name." }
+        }
+    }
+
+    /** After an edit in the viewer: a file opened from a folder is written back to that folder. */
+    fun onPreviewEdited(file: java.io.File) {
+        val (f, rel) = browseOrigin ?: return
+        if (file.name != com.aura.agent.data.ImageFiles.safeName(rel.substringAfterLast('/'))) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { com.aura.agent.agent.FolderAccess.open(a, f).write(rel, file.readBytes()) }
+                .onSuccess { notice.value = "Saved the change to ${f.name}/$rel." }
+                .onFailure { attachMsg.value = "Could not save to ${f.name}: ${it.message}" }
+        }
     }
 
     suspend fun importSkill(url: String): Result<String> = runCatching {

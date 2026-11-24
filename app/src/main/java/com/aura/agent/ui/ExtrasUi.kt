@@ -278,9 +278,9 @@ fun FoldersSection(vm: MainVM) {
     val folders by vm.extras.folders.collectAsState()
     var removing by remember { mutableStateOf<LocalFolder?>(null) }
     var msg by remember { mutableStateOf("") }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> if (uri != null) msg = "Connected ${vm.addFolder(uri)}." }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> if (uri != null) msg = vm.addFolder(uri) }
     Text("Give Aura a folder on your phone to work in or keep backups in. Pick it with your file manager. Nothing is sent to GitHub unless you ask for it.", color = A.dim, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(bottom = 10.dp, start = 2.dp))
-    CardRow(Modifier.testTag("workspace-row")) {
+    CardRow(Modifier.testTag("workspace-row").clickable { vm.openFolder(com.aura.agent.agent.Workspace.folder) }) {
         AIcon(R.drawable.ic_file, tint = A.accent)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
@@ -290,12 +290,12 @@ fun FoldersSection(vm: MainVM) {
         PillButton(androidx.compose.ui.res.stringResource(R.string.workspace_zip), { vm.shareWorkspaceZip() }, primary = false, modifier = Modifier.testTag("workspace-zip"))
     }
     folders.forEach { f ->
-        CardRow(Modifier.testTag("folder-row")) {
+        CardRow(Modifier.testTag("folder-row").clickable { vm.openFolder(f) }) {
             AIcon(R.drawable.ic_file, tint = A.accent)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(f.name, color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(if (f.enabled) "Connected" else "Disconnected", color = A.dim, fontSize = 13.sp)
+                Text((if (f.enabled) "Connected" else "Disconnected") + "  -  tap to look inside", color = A.dim, fontSize = 13.sp)
             }
             AuraSwitch(f.enabled, "folder-switch") { vm.extras.setFolderEnabled(f.id, it) }
             IconButton({ removing = f }, Modifier.testTag("folder-remove")) { AIcon(R.drawable.ic_trash, tint = A.dim, size = 20.dp) }
@@ -459,13 +459,13 @@ fun PushConsentSection(vm: MainVM) {
 
 /** A slim "Context 12k / 128k" gauge for the chat header. */
 @Composable
-fun ContextGauge(used: Int, limit: Int, modifier: Modifier = Modifier) {
+fun ContextGauge(used: Int, limit: Int, estimated: Boolean = false, modifier: Modifier = Modifier) {
     val level = com.aura.agent.agent.ContextMeter.level(used, limit)
     val color = when (level) { 2 -> A.danger; 1 -> androidx.compose.ui.graphics.Color(0xFFC98A2B); else -> A.accent }
     val fraction = if (limit <= 0) 0f else (used.toFloat() / limit).coerceIn(0f, 1f)
     Row(modifier.testTag("context-meter"), verticalAlignment = Alignment.CenterVertically) {
         Text(
-            androidx.compose.ui.res.stringResource(R.string.context_label, com.aura.agent.agent.ContextMeter.format(used), com.aura.agent.agent.ContextMeter.format(limit)),
+            androidx.compose.ui.res.stringResource(R.string.context_label, (if (estimated) "≈" else "") + com.aura.agent.agent.ContextMeter.format(used), com.aura.agent.agent.ContextMeter.format(limit)),
             color = if (level == 0) A.dim else color, fontSize = 11.sp, maxLines = 1,
         )
         Spacer(Modifier.width(8.dp))
@@ -567,4 +567,129 @@ fun DictationSection(vm: MainVM) {
         }
         Text("Connect a free provider (Settings > Free providers) so cleaning up your speech costs nothing.", color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(start = 2.dp))
     }
+}
+
+/** Look inside a phone folder (or the built-in workspace): folders, files, and a tap opens the viewer. */
+@Composable
+fun FolderBrowserScreen(vm: MainVM) {
+    val folder by vm.browseFolder.collectAsState()
+    val path by vm.browsePath.collectAsState()
+    val entries by vm.browseEntries.collectAsState()
+    val error by vm.browseError.collectAsState()
+    Column(Modifier.fillMaxSize().background(A.bg).statusBarsPadding().navigationBarsPadding()) {
+        TopBar((folder?.name ?: "Folder") + if (path.isNotBlank()) " / " + path.substringAfterLast('/') else "", { if (!vm.browseUp()) vm.go(Route.Settings) }) {
+            IconBtn(R.drawable.ic_refresh, { vm.loadBrowse() }, tint = A.dim, modifier = Modifier.testTag("browse-refresh"))
+        }
+        if (path.isNotBlank()) Text("/$path", color = A.dim, fontSize = 12.sp, modifier = Modifier.padding(start = 20.dp, bottom = 6.dp).testTag("browse-path"))
+        if (error.isNotBlank()) Text(error, color = A.danger, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp).testTag("browse-error"))
+        val list = entries
+        when {
+            list == null -> Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = A.accent, strokeWidth = 2.dp) }
+            list.isEmpty() && error.isBlank() -> Text("This folder is empty.", color = A.dim, fontSize = 15.sp, modifier = Modifier.padding(24.dp).testTag("browse-empty"))
+            else -> LazyColumn(Modifier.weight(1f).testTag("browse-list"), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 40.dp)) {
+                items(list, key = { (if (it.isDir) "d/" else "f/") + it.name }) { e ->
+                    CardRow(Modifier.testTag("browse-entry").clickable { if (e.isDir) vm.browseInto(e.name) else vm.openBrowseFile(e.name) }) {
+                        AIcon(if (e.isDir) R.drawable.ic_branch else R.drawable.ic_file, tint = if (e.isDir) A.accent else A.dim)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(e.name, color = A.text, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(if (e.isDir) "Folder" else com.aura.agent.data.Attachments.human(e.size), color = A.dim, fontSize = 12.sp)
+                        }
+                        AIcon(R.drawable.ic_chevron_right, tint = A.dim, size = 18.dp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------ image generators
+
+/** Where logos and pictures come from: Pollinations (free, no key) or an endpoint the user added. */
+@Composable
+fun ImageGeneratorsSection(vm: MainVM) {
+    val eps by vm.extras.imageEndpoints.collectAsState()
+    val active by vm.extras.imageActive.collectAsState()
+    val providers by vm.store.providers.collectAsState()
+    var editing by remember { mutableStateOf<com.aura.agent.data.ImageEndpoint?>(null) }
+    var adding by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf<com.aura.agent.data.ImageEndpoint?>(null) }
+    Text("When Aura makes a logo, icon or picture it uses the generator marked here. Pollinations is free and needs no key. You can add your own (OpenAI, Gemini imagen or any address that speaks /images/generations).", color = A.dim, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(bottom = 10.dp, start = 2.dp))
+    CardRow(Modifier.testTag("image-row-pollinations").clickable { vm.extras.setImageActive(com.aura.agent.data.Extras.POLLINATIONS) }) {
+        RadioButton(active == com.aura.agent.data.Extras.POLLINATIONS, { vm.extras.setImageActive(com.aura.agent.data.Extras.POLLINATIONS) }, colors = RadioButtonDefaults.colors(selectedColor = A.accent, unselectedColor = A.dim))
+        Column(Modifier.weight(1f)) {
+            Text("Pollinations", color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+            Text("Free, no key. The default.", color = A.dim, fontSize = 12.sp)
+        }
+    }
+    eps.forEach { e ->
+        CardRow(Modifier.testTag("image-row").clickable { vm.extras.setImageActive(e.id) }) {
+            RadioButton(active == e.id, { vm.extras.setImageActive(e.id) }, colors = RadioButtonDefaults.colors(selectedColor = A.accent, unselectedColor = A.dim))
+            Column(Modifier.weight(1f)) {
+                Text(e.name, color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(e.baseUrl.removePrefix("https://") + if (e.model.isNotBlank()) "  -  ${e.model}" else "", color = A.dim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (e.key.isBlank()) "No key" else "Key hidden", color = A.dim, fontSize = 12.sp)
+            }
+            IconButton({ editing = e }, Modifier.testTag("image-edit")) { AIcon(R.drawable.ic_edit, tint = A.dim, size = 20.dp) }
+            IconButton({ deleting = e }, Modifier.testTag("image-delete")) { AIcon(R.drawable.ic_trash, tint = A.dim, size = 20.dp) }
+        }
+    }
+    // image models that a connected provider lists next to its text models: one tap makes them an image generator
+    val offers = providers.flatMap { p -> p.models.filter { m -> (p.blocked[m] ?: com.aura.agent.net.ModelGuard.heuristic(m))?.contains("Image", true) == true && p.blocked[m]?.contains("WebSocket") != true }.map { p to it } }
+        .filter { (p, m) -> eps.none { it.baseUrl == p.baseUrl && it.model == m } }.take(6)
+    offers.forEach { (p, m) ->
+        Row(Modifier.fillMaxWidth().padding(bottom = 6.dp).clip(RoundedCornerShape(12.dp)).clickable {
+            val id = com.aura.agent.data.Ids.id()
+            vm.extras.upsertImage(com.aura.agent.data.ImageEndpoint(id, "${p.name}: $m", p.baseUrl, p.apiKey, m)); vm.extras.setImageActive(id)
+        }.padding(horizontal = 6.dp, vertical = 8.dp).testTag("image-offer"), verticalAlignment = Alignment.CenterVertically) {
+            AIcon(R.drawable.ic_image, tint = A.accent, size = 20.dp); Spacer(Modifier.width(10.dp))
+            Text("Use $m from ${p.name} as the image generator", color = A.accent, fontSize = 13.sp, lineHeight = 18.sp)
+        }
+    }
+    PillButton("Add an image generator", { adding = true }, primary = false, modifier = Modifier.testTag("image-add"))
+    if (adding) ImageDialog(null, { adding = false }) { vm.extras.upsertImage(it); vm.extras.setImageActive(it.id); adding = false }
+    editing?.let { e -> ImageDialog(e, { editing = null }) { vm.extras.upsertImage(it); editing = null } }
+    deleting?.let { d ->
+        AlertDialog(
+            onDismissRequest = { deleting = null }, containerColor = A.surface,
+            title = { Text("Remove ${d.name}?", fontFamily = FontFamily.Serif) },
+            text = { Text("Pictures go back to Pollinations. The key is erased from this phone.", color = A.dim, fontSize = 14.sp) },
+            confirmButton = { TextButton({ vm.extras.removeImage(d.id); deleting = null }, Modifier.testTag("image-delete-confirm")) { Text("Remove", color = A.danger) } },
+            dismissButton = { TextButton({ deleting = null }) { Text("Cancel", color = A.dim) } },
+        )
+    }
+}
+
+@Composable
+private fun ImageDialog(existing: com.aura.agent.data.ImageEndpoint?, onDismiss: () -> Unit, onSave: (com.aura.agent.data.ImageEndpoint) -> Unit) {
+    var name by remember { mutableStateOf(existing?.name ?: "") }
+    var url by remember { mutableStateOf(existing?.baseUrl ?: "https://") }
+    var key by remember { mutableStateOf("") }
+    var model by remember { mutableStateOf(existing?.model ?: "") }
+    var err by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss, containerColor = A.surface,
+        title = { Text(if (existing == null) "Add an image generator" else "Edit ${existing.name}", fontFamily = FontFamily.Serif) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Field("Name", name, { name = it; err = "" }, placeholder = "My image maker", tag = "image-name")
+                Field("Address (up to /v1, without /images/generations)", url, { url = it; err = "" }, placeholder = "https://api.openai.com/v1", mono = true, tag = "image-url")
+                Field(if (existing == null) "Key (if it needs one)" else "Key (leave empty to keep the saved one)", key, { key = it }, secret = true, mono = true, tag = "image-key")
+                Field("Model", model, { model = it }, placeholder = "gpt-image-1, dall-e-3 or imagen-3.0-generate-002", mono = true, tag = "image-model")
+                Text("Gemini: use https://generativelanguage.googleapis.com/v1beta/openai with an imagen model. The key stays on this phone and is only sent to this address.", color = A.dim, fontSize = 12.sp, lineHeight = 17.sp)
+                if (err.isNotBlank()) Text(err, color = A.danger, fontSize = 13.sp)
+            }
+        },
+        confirmButton = {
+            TextButton({
+                val u = url.trim().trimEnd('/')
+                when {
+                    name.isBlank() -> err = "Give it a name."
+                    !(u.startsWith("https://") || u.startsWith("http://")) || u.substringAfter("://").isBlank() -> err = "The address must start with https://"
+                    else -> onSave(com.aura.agent.data.ImageEndpoint(existing?.id ?: Ids.id(), name.trim(), u, key.trim(), model.trim()))
+                }
+            }, Modifier.testTag("image-save")) { Text("Save", color = A.accent) }
+        },
+        dismissButton = { TextButton(onDismiss) { Text("Cancel", color = A.dim) } },
+    )
 }

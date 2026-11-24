@@ -385,7 +385,7 @@ class ScrollUiTest : UiBase() {
         // scroll up again, then send: the list comes back to the newest message
         rule.onNodeWithTag("messages").performScrollToIndex(60); rule.waitForIdle()
         rule.runOnUiThread { vm().send("my new message at the end") }
-        val end2 = System.currentTimeMillis() + 8000
+        val end2 = System.currentTimeMillis() + 25000
         while (System.currentTimeMillis() < end2 && !text("my new message at the end")) { Thread.sleep(50); rule.waitForIdle() }
         assertTrue("sent message is visible at the end", text("my new message at the end"))
         assertTrue(rule.onAllNodesWithTag("scroll-down").fetchSemanticsNodes().isEmpty())

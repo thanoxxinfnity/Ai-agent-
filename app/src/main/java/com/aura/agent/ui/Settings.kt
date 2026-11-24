@@ -441,6 +441,7 @@ fun SettingsScreen(vm: MainVM) {
             item { Section(stringResource(R.string.sec_codespace)) { CodespaceToken(vm) } }
             item { Section(stringResource(R.string.sec_vercel)) { VercelSection(vm) } }
             item { Section(stringResource(R.string.sec_free)) { FreeProvidersSection(vm) } }
+            item { Section(stringResource(R.string.sec_images)) { ImageGeneratorsSection(vm) } }
             item { Section(stringResource(R.string.sec_vault)) { VaultSection(vm) } }
             item { Section(stringResource(R.string.sec_mcp)) { McpEntry(vm) } }
             item { Section(stringResource(R.string.sec_folders)) { FoldersSection(vm) } }
@@ -617,6 +618,8 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
     var blockedMap by remember(route) { mutableStateOf(existing?.blocked ?: emptyMap()) }
     var freeList by remember(route) { mutableStateOf(existing?.free ?: emptyList()) }
     var priced by remember(route) { mutableStateOf(existing?.priced ?: false) }
+    var contextMap by remember(route) { mutableStateOf(existing?.contexts ?: emptyMap()) }
+    var limitedNote by remember(route) { mutableStateOf(false) }
     val priceFilter by vm.extras.priceFilter.collectAsState()
 
     fun build() = Provider(
@@ -624,11 +627,11 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
         modelsUrl = modelsUrl.trim(),
         headers = headers.lines().mapNotNull { l -> l.split(":", limit = 2).takeIf { it.size == 2 && it[0].isNotBlank() }?.let { it[0].trim() to it[1].trim() } }.toMap(),
         models = models, defaultModel = defaultModel.ifBlank { models.firstOrNull().orEmpty() },
-        rpm = rpm.toIntOrNull()?.coerceIn(0, 100000) ?: 0, reasoning = reasoning, blocked = blockedMap, free = freeList.filter { it in models }, priced = priced,
+        rpm = rpm.toIntOrNull()?.coerceIn(0, 100000) ?: 0, reasoning = reasoning, blocked = blockedMap, free = freeList.filter { it in models }, priced = priced, contexts = contextMap.filterKeys { it in models },
     )
     val built = remember { mutableStateOf<Provider?>(null) }
 
-    val filtered = remember(models, query, priceFilter, freeList) { models.filter { (query.isBlank() || it.contains(query, true)) && when (priceFilter) { "free" -> it in freeList; "paid" -> it !in freeList; else -> true } } }
+    val filtered = remember(models, query, priceFilter, freeList, blockedMap) { models.filter { (query.isBlank() || it.contains(query, true)) && (blockedMap[it] ?: com.aura.agent.net.ModelGuard.heuristic(it)) == null && when (priceFilter) { "free" -> it in freeList; "paid" -> it !in freeList; else -> true } } }
 
     Column(Modifier.fillMaxSize().background(A.bg).statusBarsPadding().navigationBarsPadding().imePadding()) {
         TopBar(if (existing == null) "New provider" else "Edit provider", { vm.go(Route.Settings) }) {
@@ -666,7 +669,7 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
                         scope.launch {
                             vm.fetchModels(build()).onSuccess { full ->
                                 val list = full.models
-                                models = list; blockedMap = full.blocked; freeList = full.free.toList(); priced = full.priced
+                                models = list; blockedMap = full.blocked; freeList = full.free.toList(); priced = full.priced; contextMap = full.contexts; limitedNote = full.limitedToFree
                                 if (defaultModel.isBlank() || defaultModel !in list || defaultModel in full.blocked) defaultModel = list.firstOrNull { it !in full.blocked }.orEmpty()
                                 if (list.isEmpty()) error = "The endpoint returned no models. Add one manually below."
                                 else if (full.blocked.isNotEmpty()) error = "${full.blocked.size} models are greyed out: they cannot do normal chat (live, speech, embedding or image models)."
@@ -693,7 +696,11 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
                     }
                 }
             }
-            item { PriceFilterRow(priceFilter, { vm.extras.setPriceFilter(it) }, Modifier.padding(top = 6.dp)); if (!priced && models.isNotEmpty()) Text(stringResource(R.string.price_unknown), color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(bottom = 4.dp)) }
+            item {
+                val hidden = models.count { (blockedMap[it] ?: com.aura.agent.net.ModelGuard.heuristic(it)) != null }
+                if (hidden > 0) Text("$hidden models that are not for chatting (images, music, speech, embeddings) are hidden.", color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(bottom = 4.dp).testTag("hidden-note"))
+                if (limitedNote) Text("No API key is set, so only the free models are listed: paid ones need a key. Add a key and refresh to see them all.", color = A.accent, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(bottom = 4.dp).testTag("limited-note"))
+                PriceFilterRow(priceFilter, { vm.extras.setPriceFilter(it) }, Modifier.padding(top = 6.dp)); if (!priced && models.isNotEmpty()) Text(stringResource(R.string.price_unknown), color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(bottom = 4.dp)) }
             items(filtered.take(300), key = { it }) { m ->
                 val sel = m == defaultModel
                 val why = blockedMap[m] ?: com.aura.agent.net.ModelGuard.heuristic(m)

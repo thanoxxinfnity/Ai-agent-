@@ -38,7 +38,7 @@ import java.io.File
 
 /** A file the agent gave the user, shown inside the app. Only types the app can really display are offered a preview; text can also be edited here. */
 @Composable
-fun FilePreviewDialog(att: Attachment, startEdit: Boolean, onDownload: () -> Unit, onShare: () -> Unit, onAsk: () -> Unit, onDismiss: () -> Unit) {
+fun FilePreviewDialog(att: Attachment, startEdit: Boolean, onDownload: () -> Unit, onShare: () -> Unit, onAsk: () -> Unit, onDismiss: () -> Unit, onEdited: (File) -> Unit = {}) {
     val file = remember(att.path) { File(att.path) }
     val kind = remember(att.path) { Previewable.kind(att.name, att.mime, runCatching { file.inputStream().use { it.readNBytesCompat(8192) } }.getOrDefault(ByteArray(0))) }
     val canEdit = kind == "text" || kind == "markdown"
@@ -56,7 +56,7 @@ fun FilePreviewDialog(att: Attachment, startEdit: Boolean, onDownload: () -> Uni
                 androidx.compose.material3.IconButton(onDismiss, Modifier.testTag("file-preview-close")) { AIcon(R.drawable.ic_close, tint = A.dim) }
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                if (editing) EditorBody(file, onSaved = { editing = false; version++; note = "Saved. The changes are in this copy inside Aura; download or share it to take it out." }, onCancel = { editing = false })
+                if (editing) EditorBody(file, onSaved = { editing = false; version++; note = "Saved. The changes are in this copy inside Aura; download or share it to take it out."; onEdited(file) }, onCancel = { editing = false })
                 else when (kind) {
                     "image" -> ImageBody(file)
                     "pdf" -> PdfBody(file)

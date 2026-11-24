@@ -23,6 +23,7 @@ class ModelGuardUnitTest {
             "gemini-2.5-flash-preview-tts", "gemini-3.8-flash-tts", "text-embedding-004", "gemini-embedding-001", "nvidia/nv-embedqa-e5-v5",
             "imagen-4.0-generate-001", "veo-3.0-generate-preview", "gpt-image-1", "dall-e-3", "sora-2", "flux-pro", "gpt-4o-realtime-preview",
             "whisper-large-v3", "gpt-4o-transcribe", "llama-guard-3-8b", "some-bidi-model",
+            "gemini-2.5-flash-image", "gemini-3-pro-image-preview", "gemini-2.0-flash-preview-image-generation", "gemini-nano-banana-2.1", "lyria-3-pro-preview", "google/gemini-3.1-flash-image", "openai/gpt-5-image-mini",
         )
         for (m in blocked) assertNotNull("must be blocked: $m", ModelGuard.heuristic(m))
         val fine = listOf(
@@ -143,18 +144,16 @@ class ModelGuardAgentTest {
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [34])
 class ModelPickerBlockedUiTest : UiBase() {
-    @Test fun blocked_models_are_greyed_out_with_the_reason_and_cannot_be_selected() {
+    @Test fun blocked_models_are_hidden_from_the_picker_and_only_chat_models_are_listed() {
         rule.onNodeWithText("Skip for now").performClick(); rule.waitForIdle()
         val app = rule.activity.application as App
         app.store.providers.value.forEach { app.store.deleteProvider(it.id) }
-        app.store.upsertProvider(Provider("P", "Prov", "http://x/v1", "k", models = listOf("good-chat", "gemini-live-x"), defaultModel = "good-chat"))
+        app.store.upsertProvider(Provider("P", "Prov", "http://x/v1", "k", models = listOf("good-chat", "gemini-live-x", "gemini-2.5-flash-image", "text-embedding-004", "other-chat"), defaultModel = "good-chat"))
         app.store.select("P", "good-chat"); app.store.setAuto(false)
         rule.waitForIdle()
         rule.onNodeWithText("good-chat").performClick()
-        rule.onNodeWithTag("model-list").performScrollToNode(hasText("gemini-live-x")); rule.waitForIdle()
-        assertTrue("picker shows the reason", text("only works over a WebSocket"))
-        rule.onNodeWithText("gemini-live-x").performClick(); rule.waitForIdle()
-        assertEquals("a blocked model cannot be chosen", "good-chat", app.store.activeModel.value)
-        assertTrue(text("gemini-live-x"))
+        rule.onNodeWithTag("model-list").performScrollToNode(hasText("other-chat")); rule.waitForIdle()
+        assertTrue(text("good-chat") && text("other-chat"))
+        for (hidden in listOf("gemini-live-x", "gemini-2.5-flash-image", "text-embedding-004")) assertTrue("$hidden is not offered", rule.onAllNodesWithText(hidden).fetchSemanticsNodes().isEmpty())
     }
 }

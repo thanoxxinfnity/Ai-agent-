@@ -57,7 +57,8 @@ class SafBackend(ctx: Context, private val tree: Uri) : FolderBackend {
             DocumentsContract.Document.COLUMN_SIZE, DocumentsContract.Document.COLUMN_LAST_MODIFIED,
         )
         val out = ArrayList<Doc>()
-        cr.query(uri, cols, android.os.Bundle.EMPTY, null)?.use { c ->
+        val cursor = cr.query(uri, cols, android.os.Bundle.EMPTY, null) ?: throw java.io.FileNotFoundException("The folder is not available (its app did not answer).")
+        cursor.use { c ->
             while (c.moveToNext()) out += Doc(c.getString(0).orEmpty(), c.getString(1).orEmpty(), c.getString(2).orEmpty(), if (c.isNull(3)) 0 else c.getLong(3), if (c.isNull(4)) 0 else c.getLong(4))
         }
         return out

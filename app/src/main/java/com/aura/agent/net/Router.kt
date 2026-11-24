@@ -50,6 +50,8 @@ object LlmRouter {
     class Hooks(
         val onSwitch: suspend (String) -> Unit = {},
         val onWait: suspend (Int) -> Unit = {},
+        /** the provider's own count of the prompt tokens of the request that just ran */
+        val onUsage: (Int) -> Unit = {},
     )
 
     private fun switchable(e: LlmError) = e.code == 0 || e.code in setOf(401, 403, 408, 429) || e.code in 500..599
@@ -81,7 +83,7 @@ object LlmRouter {
         val cands = if (auto) store.candidates() else listOfNotNull(store.current())
         if (cands.isEmpty()) throw LlmError("No model selected. Open Settings, add a provider and pick a model.")
         if (!auto) cands[0].let { (p, m) -> ModelGuard.reason(p, m)?.let { throw LlmError(ModelGuard.warning(p, m, it), 400) } }
-        if (!auto) return Llm.stream(cands[0].first, cands[0].second, system, msgs, tools, onText, 3, hooks.onWait, effort)
+        if (!auto) return Llm.stream(cands[0].first, cands[0].second, system, msgs, tools, onText, 3, hooks.onWait, effort, hooks.onUsage)
 
         val ready = cands.filter { Cooldowns.remaining(Cooldowns.key(it.first, it.second)) == 0L }
         val cooling = cands.filter { Cooldowns.remaining(Cooldowns.key(it.first, it.second)) > 0 }.sortedBy { Cooldowns.remaining(Cooldowns.key(it.first, it.second)) }
@@ -95,7 +97,7 @@ object LlmRouter {
             if (rem > 0) for (left in (rem / 1000).toInt().coerceIn(1, 60) downTo 1) { hooks.onWait(left); delay(1000) }
             if (i > 0) hooks.onSwitch("Switched to ${c.second} (${c.first.name}) because ${queue[i - 1].second} $why.")
             try {
-                return Llm.stream(c.first, c.second, system, msgs, tools, { emitted = true; onText(it) }, if (i == queue.lastIndex) 3 else 0, hooks.onWait, effort)
+                return Llm.stream(c.first, c.second, system, msgs, tools, { emitted = true; onText(it) }, if (i == queue.lastIndex) 3 else 0, hooks.onWait, effort, hooks.onUsage)
             } catch (e: LlmError) {
                 if (emitted || !switchable(e)) throw e
                 Cooldowns.mark(key, cooldownMs(e)); lastErr = e; why = "is not available: " + reason(e).removePrefix("it ")

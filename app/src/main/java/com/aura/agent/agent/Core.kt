@@ -162,6 +162,20 @@ object ContextMeter {
     fun usedTokens(messages: List<com.aura.agent.data.MessageEntity>): Int =
         Tokens.estimate(chars(messages.filter { it.role != "switch" }, AgentRunner.SYSTEM.length))
 
+    /** What the provider itself counted for the last request of a chat, and how many messages that request carried. */
+    class Real(val tokens: Int, val messageCount: Int)
+
+    /**
+     * (tokens, estimated?). With the provider's own count of the last prompt, only what came after it (the reply, tool results, new messages)
+     * is estimated; without one the whole chat is an estimate and is marked so.
+     */
+    fun used(messages: List<com.aura.agent.data.MessageEntity>, real: Real?): Pair<Int, Boolean> {
+        val live = messages.filter { it.role != "switch" && !it.compacted }
+        if (real == null || real.messageCount > live.size) return usedTokens(messages) to true
+        val after = live.drop(real.messageCount)
+        return real.tokens + Tokens.estimate(after.sumOf { it.content.length + (it.toolCalls?.length ?: 0) }) to false
+    }
+
     fun format(n: Int): String = when {
         n >= 1_000_000 -> "%.1fM".format(n / 1_000_000.0).replace(".0M", "M")
         n >= 10_000 -> "${n / 1000}k"

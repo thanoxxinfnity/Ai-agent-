@@ -22,6 +22,10 @@ data class LocalFolder(
     val enabled: Boolean = true,
 )
 
+/** An image generator the user added (an address that speaks "/images/generations"). The key is used by the app only. */
+@Serializable
+data class ImageEndpoint(val id: String, val name: String, val baseUrl: String, val key: String = "", val model: String = "")
+
 /** One API key in the hidden key box. The model only ever sees [name] and [baseUrl]; [key] is used by the app alone. */
 @Serializable
 data class VaultKey(
@@ -42,6 +46,7 @@ data class VaultKey(
  * tokens, so nothing here is ever sent anywhere except to the MCP server the user chose.
  */
 class Extras(ctx: Context) {
+    companion object { const val POLLINATIONS = "pollinations" }
     private val prefs: SharedPreferences = try {
         val key = MasterKey.Builder(ctx).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
         EncryptedSharedPreferences.create(
@@ -63,6 +68,23 @@ class Extras(ctx: Context) {
     /** "en" (default) or "hi"; shown in Settings > Language and applied at once */
     val language: StateFlow<String> = _lang.asStateFlow()
     fun setLanguage(code: String) { val c = if (code == "hi") "hi" else "en"; _lang.value = c; prefs.edit().putString("language", c).apply() }
+
+    // ---- image generators ----
+    private val _images = MutableStateFlow(runCatching { AppJson.decodeFromString<List<ImageEndpoint>>(prefs.getString("imageEndpoints", "[]") ?: "[]") }.getOrDefault(emptyList()))
+    val imageEndpoints: StateFlow<List<ImageEndpoint>> = _images.asStateFlow()
+    private val _imageActive = MutableStateFlow(prefs.getString("imageActive", POLLINATIONS) ?: POLLINATIONS)
+    /** which generator logos and pictures come from: "pollinations" (free, no key, the default) or the id of one the user added */
+    val imageActive: StateFlow<String> = _imageActive.asStateFlow()
+    private fun saveImages(l: List<ImageEndpoint>) { _images.value = l; prefs.edit().putString("imageEndpoints", AppJson.encodeToString(l)).apply() }
+    fun upsertImage(e: ImageEndpoint) {
+        val cur = _images.value; val old = cur.firstOrNull { it.id == e.id }
+        val next = e.copy(key = e.key.ifBlank { old?.key.orEmpty() })
+        saveImages(if (old != null) cur.map { if (it.id == e.id) next else it } else cur + next)
+    }
+    fun removeImage(id: String) { saveImages(_images.value.filterNot { it.id == id }); if (_imageActive.value == id) setImageActive(POLLINATIONS) }
+    fun setImageActive(id: String) { val v = if (id == POLLINATIONS || _images.value.any { it.id == id }) id else POLLINATIONS; _imageActive.value = v; prefs.edit().putString("imageActive", v).apply() }
+    /** the endpoint chosen for pictures, or null when Pollinations is the choice */
+    fun activeImage(): ImageEndpoint? = _images.value.firstOrNull { it.id == _imageActive.value }
 
     // ---- speaking style for read-aloud ----
     private val _vStyle = MutableStateFlow(prefs.getString("voiceStyle", "") ?: "")

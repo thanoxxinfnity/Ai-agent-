@@ -27,6 +27,8 @@ data class Provider(
     /** models the provider says are free, and whether it gave price information at all */
     val free: List<String> = emptyList(),
     val priced: Boolean = false,
+    /** each model's own context window in tokens, where the provider lists it */
+    val contexts: Map<String, Int> = emptyMap(),
     /** requests per minute this provider allows; 0 = Aura's built-in default for known hosts */
     val rpm: Int = 0,
     /** "auto" sends the reasoning level only to hosts known to accept it; "on" always; "off" never */
@@ -251,6 +253,9 @@ class Store(ctx: Context) {
         _supaUrl.value = url; _supaKey.value = key; _supaSync.value = sync
         prefs.edit().putString("supaUrl", url).putString("supaKey", key).putBoolean("supaSync", sync).apply()
     }
+
+    /** The context window to show for the model in use: the model's own window when its provider lists it, else the size set in Settings. */
+    fun contextLimit(): Int = current()?.let { (p, m) -> p.contexts[m] }?.takeIf { it > 0 } ?: contextTokens.value
 
     fun current(): Pair<Provider, String>? {
         val p = _providers.value.firstOrNull { it.id == _activeProvider.value } ?: return null

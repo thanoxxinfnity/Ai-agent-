@@ -9,7 +9,7 @@ object ModelGuard {
         Regex("native-audio|(?<![a-z])realtime(?![a-z])|bidi") to "Live audio model: it only works over a WebSocket connection",
         Regex("(?<![a-z])tts(?![a-z])|text-to-speech") to "Speech output model, not a chat model",
         Regex("embed") to "Embedding model, not a chat model",
-        Regex("imagen|dall-e|gpt-image|(?<![a-z])veo(?![a-z])|(?<![a-z])sora(?![a-z])|flux") to "Image or video generator, not a chat model",
+        Regex("imagen|dall-e|gpt-image|(?<![a-z])image(?![a-z])|nano-banana|(?<![a-z])veo(?![a-z])|(?<![a-z])sora(?![a-z])|flux|stable-diffusion|midjourney|lyria|(?<![a-z])music(?![a-z])") to "Image, music or video generator, not a chat model",
         Regex("whisper|transcribe|(?<![a-z])stt(?![a-z])") to "Speech-to-text model, not a chat model",
         Regex("moderation|guard(?![a-z])") to "Safety classifier, not a chat model",
     )

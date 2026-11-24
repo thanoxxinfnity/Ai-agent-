@@ -31,7 +31,7 @@ object ToolsLive {
         ),
         ToolDef(
             "generate_image",
-            "Generate an image for free with Pollinations (no key). Use it for app icons (512 or 1024 square), splash banners and UI assets. The PNG is shown in the chat and kept on the phone; save_to_repo_path commits it into a GitHub repo (for example app/src/main/res/mipmap-xxxhdpi/ic_launcher.png or assets/banner.png); save_to_phone also puts it in the gallery.",
+            "Generate an image with the generator the user chose in Settings > Image generators (by default Pollinations: free, no key). Use it for app icons (512 or 1024 square), splash banners and UI assets. The PNG is shown in the chat and kept on the phone; save_to_repo_path commits it into a GitHub repo (for example app/src/main/res/mipmap-xxxhdpi/ic_launcher.png or assets/banner.png); save_to_phone also puts it in the gallery.",
             schema(
                 listOf("prompt"),
                 "prompt" to prop("string", "Describe the image in English; for icons say flat, centered, no text, solid background"),
@@ -116,14 +116,23 @@ object ToolsLive {
         if (prompt.length < 3) return "ERROR: prompt required (at least a few words)."
         val w = ImageGen.clampSize(a.n("width")); val h = ImageGen.clampSize(a.n("height"))
         ctx.emit("Generating a ${w}x$h image...\n")
-        val img = ImageGen.generate(prompt, w, h, a.n("seed"), a.s("model")) { ctx.emit(it + "\n") }
+        val ep = ctx.app.extras.activeImage()
+        var note = ""
+        val img = if (ep != null) {
+            try { com.aura.agent.net.OpenAiImages.generate(ep, prompt, w, h) { ctx.emit(it + "\n") } }
+            catch (e: com.aura.agent.net.ImageGenError) {
+                // the user's own generator failed: the free one still makes the picture, and the model says why
+                note = " (${e.message} Used the free Pollinations generator instead.)"
+                ImageGen.generate(prompt, w, h, a.n("seed"), a.s("model")) { ctx.emit(it + "\n") }
+            }
+        } else ImageGen.generate(prompt, w, h, a.n("seed"), a.s("model")) { ctx.emit(it + "\n") }
         val png = ImageFiles.toPng(img.bytes)
         val bytes = png ?: img.bytes
         val ext = if (png != null) "png" else if (img.mime.contains("jpeg") || img.mime.contains("jpg")) "jpg" else img.mime.substringAfter('/').ifBlank { "img" }
         val fileName = ImageFiles.safeName(a.s("filename")?.takeIf { it.isNotBlank() }?.let { if (it.contains('.')) it else "$it.$ext" } ?: "${ImageFiles.slug(prompt)}-${w}x$h.$ext")
         val file = File(ctx.app.filesDir, "generated/$fileName").also { it.parentFile?.mkdirs(); it.writeBytes(bytes) }
         ctx.produced += Attachment(fileName, if (ext == "png") "image/png" else img.mime, file.length(), file.absolutePath, "image")
-        val out = StringBuilder("Generated ${w}x$h ${ext.uppercase()} (${bytes.size / 1024} KB), saved on the phone as $fileName and shown in the chat.")
+        val out = StringBuilder("Generated ${w}x$h ${ext.uppercase()} (${bytes.size / 1024} KB) with ${if (ep != null && note.isBlank()) ep.name else "Pollinations (free)"}, saved on the phone as $fileName and shown in the chat.$note")
         if (png == null) out.append(" Note: it could not be converted to PNG, so it stays ${ext.uppercase()}.")
         a.s("save_to_repo_path")?.trim()?.trim('/')?.takeIf { it.isNotEmpty() }?.let { path ->
             out.append('\n').append(ToolsPro.commitBytes(ctx, a.s("repo"), path, bytes, "Add generated image $path", null))

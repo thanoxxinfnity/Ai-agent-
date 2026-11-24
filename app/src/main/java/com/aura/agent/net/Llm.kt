@@ -42,11 +42,32 @@ data class LlmMsg(
 class ToolDef(val name: String, val description: String, val params: JsonObject)
 
 /** [free] = models the provider's own list says cost nothing; [priced] = the list carried price information at all (otherwise nothing is known about cost). */
-class ModelList(val models: List<String>, val blocked: Map<String, String>, val free: Set<String> = emptySet(), val priced: Boolean = false)
+class ModelList(
+    val models: List<String>, val blocked: Map<String, String>, val free: Set<String> = emptySet(), val priced: Boolean = false,
+    /** the model's own context window in tokens, where the provider says */
+    val contexts: Map<String, Int> = emptyMap(),
+    /** the list was cut to the free models because no key is set (paid ones cannot be used without a key) */
+    val limitedToFree: Boolean = false,
+)
+
+/** One /models answer, read. */
+class Fetched(val names: List<String>, val free: Set<String>, val priced: Boolean, val contexts: Map<String, Int>, val nonText: Map<String, String>)
 
 /** Reads "is this model free?" out of a /models entry. true = free, false = costs money, null = the entry says nothing about price. */
 object Pricing {
     private fun num(e: JsonElement?): Double? = (e as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()
+
+    /** The model's own context window, from whichever field the provider uses (OpenRouter and Kilo: context_length; Gemini: inputTokenLimit). */
+    fun contextOf(o: JsonObject): Int? {
+        fun i(e: JsonElement?) = (e as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.toInt()?.takeIf { it > 0 }
+        return i(o["context_length"]) ?: i((o["top_provider"] as? JsonObject)?.get("context_length")) ?: i(o["inputTokenLimit"]) ?: i(o["context_window"]) ?: i(o["max_context_length"])
+    }
+
+    /** Models whose answers are not text (pictures, audio): the list says so in architecture.output_modalities. */
+    fun nonTextReason(o: JsonObject): String? {
+        val out = ((o["architecture"] as? JsonObject)?.get("output_modalities") as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull } ?: return null
+        return if (out.isNotEmpty() && "text" !in out) "Makes ${out.joinToString(" and ")}, not text" else null
+    }
 
     fun isFree(o: JsonObject, id: String): Boolean? {
         (o["isFree"] as? JsonPrimitive)?.booleanOrNull?.let { return it }
@@ -94,9 +115,15 @@ object Llm {
 
     /** Model ids plus the models that cannot do normal chat. Gemini's own list tells exactly which methods each model supports. */
     suspend fun listModelsFull(p: Provider): ModelList {
-        val (names, free, priced) = fetchModels(p)
+        val f = fetchModels(p)
         val blocked = LinkedHashMap<String, String>()
-        names.forEach { n -> ModelGuard.heuristic(n)?.let { blocked[n] = it } }
+        f.names.forEach { n -> ModelGuard.heuristic(n)?.let { blocked[n] = it } }
+        blocked.putAll(f.nonText)
+        // without a key only the free models can be used: list only those
+        val limited = p.apiKey.isBlank() && f.priced && f.free.isNotEmpty()
+        val names = if (limited) f.names.filter { it in f.free } else f.names
+        val free = f.free; val priced = f.priced
+        val contexts = LinkedHashMap(f.contexts)
         if ("/v1beta/openai" in p.baseUrl && p.apiKey.isNotBlank()) runCatching {
             val url = p.baseUrl.trimEnd('/').removeSuffix("/openai") + "/models?pageSize=1000"
             val body = withContext(Dispatchers.IO) {
@@ -106,18 +133,19 @@ object Llm {
                 val o = e as? JsonObject ?: return@forEach
                 val id = o["name"].str()?.removePrefix("models/") ?: return@forEach
                 val methods = (o["supportedGenerationMethods"] as? JsonArray)?.mapNotNull { it.str() }.orEmpty()
+                (o["inputTokenLimit"] as? JsonPrimitive)?.intOrNull?.let { contexts[id] = it }
                 if (methods.isNotEmpty() && "generateContent" !in methods) {
                     blocked[id] = if ("bidiGenerateContent" in methods) "Live model: it only works over a WebSocket (bidiGenerateContent), not normal chat" else "Not a chat model (no generateContent)"
                 }
             }
         }
-        return ModelList(names, blocked.filterKeys { it in names }, free, priced)
+        return ModelList(names, blocked.filterKeys { it in names }, free.filter { it in names }.toSet(), priced, contexts.filterKeys { it in names }, limited)
     }
 
-    suspend fun listModels(p: Provider): List<String> = fetchModels(p).first
+    suspend fun listModels(p: Provider): List<String> = fetchModels(p).names
 
     /** Model ids, the ids the provider calls free, and whether it said anything about price. */
-    private suspend fun fetchModels(p: Provider): Triple<List<String>, Set<String>, Boolean> = withContext(Dispatchers.IO) {
+    private suspend fun fetchModels(p: Provider): Fetched = withContext(Dispatchers.IO) {
         val url = p.modelsUrl.ifBlank { p.baseUrl.trimEnd('/') + "/models" }
         val req = Request.Builder().url(url).get().auth(p).build()
         Http.client.newCall(req).execute().use { r ->
@@ -131,16 +159,21 @@ object Llm {
                 else -> JsonArray(emptyList())
             }
             val free = LinkedHashSet<String>(); var priced = false
+            val contexts = LinkedHashMap<String, Int>(); val nonText = LinkedHashMap<String, String>()
             val names = arr.mapNotNull { e ->
                 val id = when (e) {
                     is JsonPrimitive -> e.contentOrNull
                     is JsonObject -> e["id"].str() ?: e["name"].str() ?: e["model"].str()
                     else -> null
                 }?.removePrefix("models/")
-                if (id != null && e is JsonObject) Pricing.isFree(e, id)?.let { priced = true; if (it) free += id }
+                if (id != null && e is JsonObject) {
+                    Pricing.isFree(e, id)?.let { priced = true; if (it) free += id }
+                    Pricing.contextOf(e)?.let { contexts[id] = it }
+                    Pricing.nonTextReason(e)?.let { nonText[id] = it }
+                }
                 id
             }.filter { it.isNotBlank() }.distinct().sorted()
-            Triple(names, free.filter { it in names }.toSet(), priced)
+            Fetched(names, free.filter { it in names }.toSet(), priced, contexts.filterKeys { it in names }, nonText.filterKeys { it in names })
         }
     }
 
@@ -155,6 +188,7 @@ object Llm {
         maxRetries: Int = 3,
         onWait: suspend (Int) -> Unit = {},
         effort: String? = null,
+        onUsage: (Int) -> Unit = {},
     ): List<ToolCall> = withContext(Dispatchers.IO) {
         ModelGuard.reason(p, model)?.let { throw LlmError(ModelGuard.warning(p, model, it), 400) }
         var responses = (learnedWire[wireKey(p)] ?: p.wire) == "responses"
@@ -197,7 +231,7 @@ object Llm {
                             attempt++
                             null
                         } else throw LlmError(friendly(code, errBody), code, hinted)
-                    } else readResponse(resp, responses, guarded).also {
+                    } else readResponse(resp, responses, guarded, onUsage).also {
                         if (flipped) { val w = if (responses) "responses" else "chat"; learnedWire[wireKey(p)] = w; onWireLearned(p.id, w) }
                     }
                 }
@@ -255,9 +289,9 @@ object Llm {
         }
     }
 
-    private fun readResponse(resp: okhttp3.Response, responses: Boolean, onText: (String) -> Unit): List<ToolCall> {
+    private fun readResponse(resp: okhttp3.Response, responses: Boolean, onText: (String) -> Unit, onUsage: (Int) -> Unit = {}): List<ToolCall> {
         val ct = resp.headers["Content-Type"].orEmpty()
-        val acc = Acc(onText)
+        val acc = Acc(onText, onUsage)
         if (ct.contains("event-stream")) {
             val src = resp.body!!.source()
             while (true) {
@@ -359,12 +393,13 @@ object Llm {
 
     private class Slot(var id: String = "", var name: String = "", val args: StringBuilder = StringBuilder())
 
-    private class Acc(val onText: (String) -> Unit) {
+    private class Acc(val onText: (String) -> Unit, val onUsage: (Int) -> Unit = {}) {
         val slots = LinkedHashMap<Int, Slot>()
         val done = ArrayList<ToolCall>()
 
         fun chatChunk(obj: JsonObject) {
             (obj["error"] as? JsonObject)?.let { throw LlmError(it["message"].str() ?: it.toString()) }
+            (obj["usage"] as? JsonObject)?.let { u -> ((u["prompt_tokens"] ?: u["input_tokens"]) as? JsonPrimitive)?.intOrNull?.takeIf { it > 0 }?.let(onUsage) }   // the provider's own count of the prompt
             val choice = (obj["choices"] as? JsonArray)?.firstOrNull() as? JsonObject ?: return
             val delta = (choice["delta"] as? JsonObject) ?: (choice["message"] as? JsonObject) ?: return
             delta["content"].str()?.takeIf { it.isNotEmpty() }?.let(onText)
@@ -394,6 +429,7 @@ object Llm {
                         )
                     }
                 }
+                "response.completed" -> (((obj["response"] as? JsonObject)?.get("usage") as? JsonObject)?.get("input_tokens") as? JsonPrimitive)?.intOrNull?.takeIf { it > 0 }?.let(onUsage)
                 "response.failed", "error" -> {
                     val e = (obj["response"] as? JsonObject)?.get("error") ?: obj["error"] ?: obj
                     throw LlmError((e as? JsonObject)?.get("message").str() ?: e.toString().take(300))

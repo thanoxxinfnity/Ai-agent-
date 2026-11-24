@@ -33,12 +33,14 @@ object FreeCatalog {
             }
         } catch (x: IOException) { throw LlmError("Could not reach ${e.name}. Check the connection.") }
         val data = ((Json.parseToJsonElement(body) as? JsonObject)?.get("data") as? JsonArray).orEmpty()
+        val ctxMap = LinkedHashMap<String, Int>()
+        data.mapNotNull { it as? JsonObject }.forEach { o -> (o["id"] as? JsonPrimitive)?.contentOrNull?.let { id -> Pricing.contextOf(o)?.let { ctxMap[id] = it } } }
         val free = data.mapNotNull { it as? JsonObject }.filter { o ->
             val id = (o["id"] as? JsonPrimitive)?.contentOrNull.orEmpty()
             val outText = ((o["architecture"] as? JsonObject)?.get("output_modalities") as? JsonArray)?.any { (it as? JsonPrimitive)?.contentOrNull == "text" } ?: true
             outText && ((o["isFree"] as? JsonPrimitive)?.booleanOrNull == true || id.endsWith(":free")) && ModelGuard.heuristic(id) == null
         }.mapNotNull { (it["id"] as? JsonPrimitive)?.contentOrNull }.distinct()
         if (free.isEmpty()) throw LlmError("${e.name} listed no free models right now. Try again later.")
-        free.sortedWith(compareByDescending<String> { it == e.preferred }.thenBy { it }).let { ModelList(it, emptyMap(), it.toSet(), true) }
+        free.sortedWith(compareByDescending<String> { it == e.preferred }.thenBy { it }).let { ModelList(it, emptyMap(), it.toSet(), true, ctxMap.filterKeys { k -> k in it }) }
     }
 }

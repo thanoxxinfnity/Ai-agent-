@@ -39,7 +39,13 @@ class McpClient(private val server: McpServer, private val http: OkHttpClient = 
         val b = Request.Builder().url(server.url)
             .header("Accept", "application/json, text/event-stream")
             .header("MCP-Protocol-Version", PROTOCOL)
-        server.headers.forEach { (k, v) -> if (k.isNotBlank()) b.header(k.trim(), v.trim()) }
+        server.headers.forEach { (k, v) ->
+            if (k.isBlank()) return@forEach
+            // a header name or value with a space, a line break or a non-ASCII character would crash OkHttp: say which one instead
+            try { b.header(k.trim(), v.trim()) } catch (e: IllegalArgumentException) {
+                throw McpException("The header \"${k.trim().take(40)}\" is not valid (names may not contain spaces, and neither names nor values may contain line breaks or special characters). Fix it in the server's settings.")
+            }
+        }
         sessionId?.let { b.header("Mcp-Session-Id", it) }
         return b
     }
@@ -48,7 +54,7 @@ class McpClient(private val server: McpServer, private val http: OkHttpClient = 
         val ct = resp.header("Content-Type").orEmpty()
         val body = resp.body?.string().orEmpty()
         val candidates: List<String> = if (ct.contains("event-stream")) {
-            body.split("\n\n").mapNotNull { ev ->
+            body.replace("\r\n", "\n").split("\n\n").mapNotNull { ev ->
                 ev.lines().filter { it.startsWith("data:") }.joinToString("\n") { it.removePrefix("data:").trim() }.takeIf { it.isNotBlank() }
             }
         } else listOf(body)
@@ -60,7 +66,18 @@ class McpClient(private val server: McpServer, private val http: OkHttpClient = 
         throw McpException("The server sent no answer for the request.")
     }
 
-    private fun rpc(method: String, params: JsonObject?): JsonObject {
+    private fun initialize() {
+        sessionId = null
+        rpc("initialize", buildJsonObject {
+            put("protocolVersion", PROTOCOL)
+            putJsonObject("capabilities") { }
+            putJsonObject("clientInfo") { put("name", "Aura"); put("version", "1.0") }
+        }, retried = true)
+        notify("notifications/initialized")
+    }
+
+    private fun rpc(method: String, params: JsonObject?, retried: Boolean = false): JsonObject {
+        val hadSession = sessionId != null
         val id = nextId++
         val body = buildJsonObject { put("jsonrpc", "2.0"); put("id", id); put("method", method); if (params != null) put("params", params) }
         val req = builder().post(body.toString().toRequestBody(Http.JSON)).build()
@@ -69,6 +86,8 @@ class McpClient(private val server: McpServer, private val http: OkHttpClient = 
                 if (method == "initialize") resp.header("Mcp-Session-Id")?.let { sessionId = it }
                 if (!resp.isSuccessful) {
                     val b = resp.body?.string().orEmpty().take(300)
+                    // the server forgot our session (it restarted or it expired): start a new one once and repeat the call
+                    if (resp.code == 404 && hadSession && !retried && method != "initialize") { initialize(); return rpc(method, params, retried = true) }
                     throw McpException(when (resp.code) {
                         401, 403 -> "The server refused access (${resp.code}). Check the token or header you entered."
                         404, 405 -> "This address does not speak Streamable HTTP MCP (HTTP ${resp.code}). Servers that only offer the old SSE transport are not supported."
@@ -90,12 +109,7 @@ class McpClient(private val server: McpServer, private val http: OkHttpClient = 
     }
 
     suspend fun connect(): List<McpTool> = withContext(Dispatchers.IO) {
-        rpc("initialize", buildJsonObject {
-            put("protocolVersion", PROTOCOL)
-            putJsonObject("capabilities") { }
-            putJsonObject("clientInfo") { put("name", "Aura"); put("version", "1.0") }
-        })
-        notify("notifications/initialized")
+        initialize()
         listTools()
     }
 

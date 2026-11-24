@@ -105,13 +105,14 @@ fun MainScreen(vm: MainVM) {
                     Route.Memory -> MemoryScreen(vm)
                     Route.Mcp -> McpScreen(vm)
                     Route.McpBrowse -> McpBrowseScreen(vm)
+                    Route.Browse -> FolderBrowserScreen(vm)
                     else -> SettingsScreen(vm)
                 }
             }
         }
         if (ghToken.isBlank() && !skipped) LoginGate(vm) { skipped = true }
     }
-    BackHandler0(route != Route.Chat) { vm.go(when { route == Route.McpBrowse -> Route.Mcp; route is Route.Provider || route == Route.Memory || route == Route.Mcp -> Route.Settings; else -> Route.Chat }) }
+    BackHandler0(route != Route.Chat) { vm.go(when { route == Route.McpBrowse -> Route.Mcp; route == Route.Browse -> if (vm.browseUp()) Route.Browse else Route.Settings; route is Route.Provider || route == Route.Memory || route == Route.Mcp -> Route.Settings; else -> Route.Chat }) }
 }
 
 @Composable
@@ -148,7 +149,7 @@ fun ChatHost(vm: MainVM) {
     val attachMsg by vm.attachMsg.collectAsState()
     val previewing by vm.previewFile.collectAsState()
     val previewEdit by vm.previewEdit.collectAsState()
-    previewing?.let { p -> FilePreviewDialog(p, startEdit = previewEdit, onDownload = { vm.saveFileToPhone(p) }, onShare = { vm.shareFile(p) }, onAsk = { vm.askAboutFile(p) }, onDismiss = { vm.closePreview() }) }
+    previewing?.let { p -> FilePreviewDialog(p, startEdit = previewEdit, onDownload = { vm.saveFileToPhone(p) }, onShare = { vm.shareFile(p) }, onAsk = { vm.askAboutFile(p) }, onDismiss = { vm.closePreview() }, onEdited = { vm.onPreviewEdited(it) }) }
     val pendingRepo by vm.pendingRepo.collectAsState()
     val pendingExtra by vm.pendingExtra.collectAsState()
     val pinnedRepo by vm.store.pinnedRepo.collectAsState()
@@ -189,9 +190,11 @@ fun ChatHost(vm: MainVM) {
                     val repoLabel = attached.firstOrNull().orEmpty() + if (attached.size > 1) "  +${attached.size - 1}" else ""
                     if (repoLabel.isNotBlank()) Text(repoLabel, color = A.dim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("repo-label"))
                     if (messages.isNotEmpty()) {
-                        val ctxLimit by vm.store.contextTokens.collectAsState()
-                        val used = remember(messages) { com.aura.agent.agent.ContextMeter.usedTokens(messages) }
-                        ContextGauge(used, ctxLimit, Modifier.padding(top = 2.dp))
+                        val ctxSetting by vm.store.contextTokens.collectAsState()
+                        val realMap by vm.runner.realUsage.collectAsState()
+                        val ctxLimit = remember(providers, activeProvider, activeModel, ctxSetting) { vm.store.contextLimit() }
+                        val (used, estimated) = remember(messages, realMap, currentId) { com.aura.agent.agent.ContextMeter.used(messages, realMap[currentId]) }
+                        ContextGauge(used, ctxLimit, estimated, Modifier.padding(top = 2.dp))
                     }
                 }
                 IconBtn(R.drawable.ic_plus, { vm.openChat(null); input = "" })
@@ -961,7 +964,7 @@ private fun ModelPicker(
                 }
                 item(key = "price-filter") { PriceFilterRow(priceFilter, onPriceFilter, Modifier.padding(top = 6.dp)) }
                 providers.forEach { p ->
-                    val models = (p.models + p.defaultModel).filter { it.isNotBlank() }.distinct().filter { q.isBlank() || it.contains(q, true) }.filter { m -> p.fitsPrice(m, priceFilter) }
+                    val models = (p.models + p.defaultModel).filter { it.isNotBlank() }.distinct().filter { q.isBlank() || it.contains(q, true) }.filter { m -> p.fitsPrice(m, priceFilter) }.filter { m -> com.aura.agent.net.ModelGuard.reason(p, m) == null || (!auto && p.id == activeProvider && m == activeModel) }
                     if (models.isNotEmpty()) {
                         item(key = "h-${p.id}") {
                             Text(p.name.uppercase(), color = A.dim, fontSize = 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 14.dp, bottom = 4.dp, start = 4.dp))

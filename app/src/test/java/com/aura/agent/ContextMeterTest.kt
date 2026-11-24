@@ -46,11 +46,11 @@ class ContextMeterUiTest : UiBase() {
         }
         rule.runOnUiThread { vm().openChat("ctx") }; rule.waitForIdle()
         val used = ContextMeter.usedTokens(msgs)
-        val expected = "Context ${ContextMeter.format(used)} / 32k"
+        val expected = "Context ≈${ContextMeter.format(used)} / 32k"
         assertTrue("shows $expected", text(expected))
         rule.onNodeWithTag("context-meter").assertExists()
         rule.runOnUiThread { vm().extras.setLanguage("hi") }; rule.waitForIdle()
-        assertTrue(text("कॉन्टेक्स्ट ${ContextMeter.format(used)} / 32k"))
+        assertTrue(text("कॉन्टेक्स्ट ≈${ContextMeter.format(used)} / 32k"))
         rule.runOnUiThread { vm().extras.setLanguage("en") }
     }
 }
