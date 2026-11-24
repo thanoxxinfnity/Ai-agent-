@@ -157,15 +157,66 @@ class McpClient(private val server: McpServer, private val http: OkHttpClient = 
 
 /** One server entry of the public MCP registry (registry.modelcontextprotocol.io). */
 class RegistryHeader(val name: String, val description: String, val required: Boolean, val secret: Boolean)
-class RegistryEntry(val name: String, val description: String, val version: String, val url: String, val headers: List<RegistryHeader>, val repo: String)
+class RegistryEntry(
+    val name: String, val description: String, val version: String, val url: String, val headers: List<RegistryHeader>, val repo: String,
+    /** the project's home page and an icon address, when the registry lists them (used for the logo) */
+    val website: String = "", val icon: String = "",
+    /** shown with the Featured ones: a readable title and a group (Docs, Developer, Search ...) */
+    val title: String = "", val category: String = "",
+) {
+    val shownName get() = title.ifBlank { name.substringAfterLast('/') }
+    /** places a logo may live, best first: the listed icon, then the favicon of the project's site, of the server's own host and of its main domain */
+    fun logoCandidates(): List<String> {
+        val out = LinkedHashSet<String>()
+        if (icon.startsWith("https://")) out += icon
+        listOf(website, url, repo.takeIf { !it.contains("github.com") }.orEmpty()).forEach { u ->
+            val host = runCatching { java.net.URI(u).host }.getOrNull()?.takeIf { it.isNotBlank() } ?: return@forEach
+            out += "https://$host/favicon.ico"
+            val parts = host.split('.'); if (parts.size > 2) out += "https://${parts.takeLast(2).joinToString(".")}/favicon.ico"
+        }
+        return out.toList()
+    }
+}
+
+/**
+ * Well-known remote servers shown first in Browse. Open ones need nothing; "token" ones need the key or token from the provider's account,
+ * which goes in the header named here and stays on the phone. Servers that only offer a browser sign-in (OAuth) are not listed because Aura cannot sign in for you yet.
+ */
+object McpFeatured {
+    private fun e(name: String, title: String, desc: String, url: String, cat: String, site: String, vararg hdr: RegistryHeader) =
+        RegistryEntry(name, desc, "", url, hdr.toList(), "", website = site, title = title, category = cat)
+    private fun token(name: String, hint: String) = RegistryHeader(name, hint, true, true)
+    val CATEGORIES = listOf("All", "Docs", "Developer", "Search", "Data")
+    val all: List<RegistryEntry> = listOf(
+        e("featured/deepwiki", "DeepWiki", "Ask questions about any public GitHub repository and read its generated wiki.", "https://mcp.deepwiki.com/mcp", "Developer", "https://deepwiki.com"),
+        e("featured/context7", "Context7", "Up-to-date documentation and code examples for libraries and frameworks.", "https://mcp.context7.com/mcp", "Docs", "https://context7.com"),
+        e("featured/cloudflare-docs", "Cloudflare Docs", "Search the Cloudflare developer documentation.", "https://docs.mcp.cloudflare.com/mcp", "Docs", "https://developers.cloudflare.com"),
+        e("featured/microsoft-learn", "Microsoft Learn", "Search official Microsoft and Azure documentation.", "https://learn.microsoft.com/api/mcp", "Docs", "https://learn.microsoft.com"),
+        e("featured/gitmcp", "GitMCP", "Turn any GitHub repository's docs and code into context (use gitmcp.io/owner/repo).", "https://gitmcp.io/docs", "Developer", "https://gitmcp.io"),
+        e("featured/exa", "Exa Search", "Web search and page content for AI agents.", "https://mcp.exa.ai/mcp", "Search", "https://exa.ai"),
+        e("featured/huggingface", "Hugging Face", "Search models, datasets, Spaces and papers on the Hub. Works without a token; add one for private items.", "https://huggingface.co/mcp", "Data", "https://huggingface.co"),
+        e("featured/github", "GitHub", "Repositories, issues, pull requests and code search with your own token.", "https://api.githubcopilot.com/mcp/", "Developer", "https://github.com", token("Authorization", "Bearer YOUR_GITHUB_TOKEN")),
+        e("featured/stripe", "Stripe", "Customers, payments and products with a restricted Stripe key.", "https://mcp.stripe.com", "Data", "https://stripe.com", token("Authorization", "Bearer YOUR_RESTRICTED_KEY")),
+        e("featured/linear", "Linear", "Issues and projects with a Linear API key.", "https://mcp.linear.app/mcp", "Developer", "https://linear.app", token("Authorization", "Bearer YOUR_LINEAR_API_KEY")),
+    )
+    fun matching(query: String, category: String): List<RegistryEntry> = all.filter { f ->
+        (category == "All" || f.category == category) &&
+            (query.isBlank() || query.trim().lowercase().split(Regex("\\s+")).all { w -> w in f.title.lowercase() || w in f.description.lowercase() || w in f.category.lowercase() })
+    }
+}
 
 object McpRegistry {
     @Volatile var base = "https://registry.modelcontextprotocol.io"
 
+    class Page(val entries: List<RegistryEntry>, val next: String?)
+
     /** Servers that offer a Streamable HTTP address. Others (local packages, SSE-only) cannot run on a phone and are left out. */
-    suspend fun search(query: String, limit: Int = 30): List<RegistryEntry> = withContext(Dispatchers.IO) {
+    suspend fun search(query: String, limit: Int = 30): List<RegistryEntry> = searchPage(query, null).entries.take(limit)
+
+    /** One page of the registry; [Page.next] is the cursor for the page after it (null at the end). */
+    suspend fun searchPage(query: String, cursor: String?): Page = withContext(Dispatchers.IO) {
         val url = "${base.trimEnd('/')}/v0/servers".toHttpUrl().newBuilder().addQueryParameter("limit", "100").addQueryParameter("version", "latest")
-            .apply { if (query.isNotBlank()) addQueryParameter("search", query.trim()) }.build()
+            .apply { if (query.isNotBlank()) addQueryParameter("search", query.trim()); if (!cursor.isNullOrBlank()) addQueryParameter("cursor", cursor) }.build()
         val req = Request.Builder().url(url).header("Accept", "application/json").build()
         val body = try {
             Http.client.newCall(req).execute().use {
@@ -173,7 +224,8 @@ object McpRegistry {
                 it.body?.string().orEmpty()
             }
         } catch (e: IOException) { throw McpException("Could not reach the MCP registry: ${e.message ?: "network error"}") }
-        parse(body).take(limit)
+        val next = (((runCatching { Json.parseToJsonElement(body) as? JsonObject }.getOrNull())?.get("metadata") as? JsonObject)?.get("nextCursor") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        Page(parse(body), next)
     }
 
     internal fun parse(body: String): List<RegistryEntry> {
@@ -195,6 +247,8 @@ object McpRegistry {
                 (s["description"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
                 (s["version"] as? JsonPrimitive)?.contentOrNull.orEmpty(), url, headers,
                 ((s["repository"] as? JsonObject)?.get("url") as? JsonPrimitive)?.contentOrNull.orEmpty(),
+                website = (s["websiteUrl"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
+                icon = ((s["icons"] as? JsonArray)?.firstOrNull() as? JsonObject)?.get("src").let { (it as? JsonPrimitive)?.contentOrNull }.orEmpty(),
             )
         }
         return out.distinctBy { it.name }

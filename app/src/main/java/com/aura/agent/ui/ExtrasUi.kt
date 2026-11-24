@@ -6,6 +6,7 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -27,6 +28,7 @@ import com.aura.agent.data.Ids
 import com.aura.agent.data.LocalFolder
 import com.aura.agent.net.FreeCatalog
 import com.aura.agent.net.McpException
+import com.aura.agent.net.McpFeatured
 import com.aura.agent.net.McpRegistry
 import com.aura.agent.net.McpServer
 import com.aura.agent.net.RegistryEntry
@@ -178,7 +180,7 @@ fun McpScreen(vm: MainVM) {
 /** Add a server by hand, or finish adding a registry server that needs headers. [fixedUrl] hides the address field. */
 @Composable
 fun McpAddDialog(initial: RegistryEntry?, onDismiss: () -> Unit, onSave: (McpServer) -> Unit) {
-    var name by remember { mutableStateOf(initial?.name?.substringAfterLast('/') ?: "") }
+    var name by remember { mutableStateOf(initial?.shownName ?: "") }
     var url by remember { mutableStateOf(initial?.url ?: "") }
     val needed = initial?.headers?.filter { it.required } ?: emptyList()
     val values = remember { mutableStateMapOf<String, String>() }
@@ -194,7 +196,7 @@ fun McpAddDialog(initial: RegistryEntry?, onDismiss: () -> Unit, onSave: (McpSer
                     Field("Address (Streamable HTTP)", url, { url = it; err = "" }, placeholder = "https://example.com/mcp", mono = true, tag = "mcp-url")
                 } else if (initial.description.isNotBlank()) Text(initial.description, color = A.dim, fontSize = 13.sp, lineHeight = 18.sp)
                 needed.forEach { h ->
-                    Field(h.name + if (h.description.isNotBlank()) " (${h.description.take(60)})" else "", values[h.name].orEmpty(), { values[h.name] = it; err = "" }, secret = true, mono = true, tag = "mcp-secret-${h.name}")
+                    Field(h.name + if (h.description.startsWith("Bearer ")) " (paste only your token, Aura adds Bearer)" else if (h.description.isNotBlank()) " (${h.description.take(60)})" else "", values[h.name].orEmpty(), { values[h.name] = it; err = "" }, secret = true, mono = true, tag = "mcp-secret-${h.name}")
                 }
                 Field("Other headers (optional, Name: value per line)", extra, { extra = it }, singleLine = false, minLines = 2, secret = true, mono = true, tag = "mcp-headers")
                 if (err.isNotBlank()) Text(err, color = A.danger, fontSize = 13.sp)
@@ -206,7 +208,7 @@ fun McpAddDialog(initial: RegistryEntry?, onDismiss: () -> Unit, onSave: (McpSer
                 when {
                     !(u.startsWith("https://") || u.startsWith("http://")) -> err = "The address must start with https://"
                     needed.any { values[it.name].isNullOrBlank() } -> err = "Fill in ${needed.first { values[it.name].isNullOrBlank() }.name}."
-                    else -> onSave(McpServer(Ids.id(), name.trim().ifBlank { u.substringAfter("://").substringBefore('/') }, u, parseHeaders(extra) + needed.associate { it.name to values[it.name].orEmpty().trim() }))
+                    else -> onSave(McpServer(Ids.id(), name.trim().ifBlank { u.substringAfter("://").substringBefore('/') }, u, parseHeaders(extra) + needed.associate { h -> h.name to values[h.name].orEmpty().trim().let { v -> if (h.description.startsWith("Bearer ") && !v.contains(' ')) "Bearer $v" else v } }))
                 }
             }, Modifier.testTag("mcp-save")) { Text("Connect", color = A.accent) }
         },
@@ -218,7 +220,9 @@ fun McpAddDialog(initial: RegistryEntry?, onDismiss: () -> Unit, onSave: (McpSer
 fun McpBrowseScreen(vm: MainVM) {
     val scope = rememberCoroutineScope()
     var query by remember { mutableStateOf("") }
+    var category by remember { mutableStateOf("All") }
     var results by remember { mutableStateOf<List<RegistryEntry>>(emptyList()) }
+    var next by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var searched by remember { mutableStateOf(false) }
@@ -226,14 +230,42 @@ fun McpBrowseScreen(vm: MainVM) {
     var note by remember { mutableStateOf("") }
     val servers by vm.extras.mcpServers.collectAsState()
 
-    fun search() {
+    fun search(more: Boolean = false) {
         busy = true; error = ""
         scope.launch {
-            try { results = McpRegistry.search(query); searched = true } catch (e: McpException) { error = e.message.orEmpty() }
+            try {
+                val page = McpRegistry.searchPage(query, if (more) next else null)
+                results = if (more) (results + page.entries).distinctBy { it.name } else page.entries
+                next = page.next; searched = true
+            } catch (e: McpException) { error = e.message.orEmpty() }
             busy = false
         }
     }
     LaunchedEffect(Unit) { search() }
+    fun connect(r: RegistryEntry) {
+        if (r.headers.any { it.required }) pick = r else scope.launch {
+            val s = McpServer(Ids.id(), r.shownName, r.url)
+            note = "Connecting ${s.name}..."
+            note = vm.connectMcp(s).fold({ "${s.name} connected with $it tools." }, { "Could not connect ${s.name}: ${it.message}" })
+        }
+    }
+    val featured = McpFeatured.matching(query, category)
+
+    @Composable fun card(r: RegistryEntry, tag: String) {
+        val added = servers.any { it.url == r.url }
+        CardRow(Modifier.testTag(tag)) {
+            ServerLogo(r)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(r.shownName, color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(r.description, color = A.dim, fontSize = 13.sp, lineHeight = 18.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                val need = r.headers.filter { it.required }
+                Text(if (need.isNotEmpty()) "Needs your token: " + need.joinToString { it.name } else "Open, no account needed", color = if (need.isNotEmpty()) A.accent else A.dim, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+            }
+            if (added) Text("Added", color = A.dim, fontSize = 13.sp, modifier = Modifier.padding(end = 8.dp))
+            else PillButton("Connect", { connect(r) }, primary = false, modifier = Modifier.testTag("mcp-connect"))
+        }
+    }
 
     Column(Modifier.fillMaxSize().background(A.bg).statusBarsPadding().navigationBarsPadding().imePadding()) {
         TopBar("Browse MCP servers", { vm.go(Route.Mcp) })
@@ -241,31 +273,31 @@ fun McpBrowseScreen(vm: MainVM) {
             Field("Search", query, { query = it }, placeholder = "github, search, docs, database...", tag = "mcp-search")
             Spacer(Modifier.height(8.dp))
             PillButton("Search", { search() }, primary = false, loading = busy, modifier = Modifier.testTag("mcp-search-go"))
-            Text("From the public MCP registry. Only servers you can reach over the internet are shown.", color = A.dim, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp, bottom = 8.dp))
-            if (error.isNotBlank()) Text(error, color = A.danger, fontSize = 13.sp, lineHeight = 18.sp)
-            if (note.isNotBlank()) Text(note, color = A.dim, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(bottom = 6.dp))
-        }
-        LazyColumn(Modifier.weight(1f).testTag("mcp-results"), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 40.dp)) {
-            items(results, key = { it.name }) { r ->
-                val added = servers.any { it.url == r.url }
-                CardRow(Modifier.testTag("mcp-result")) {
-                    Column(Modifier.weight(1f)) {
-                        Text(r.name.substringAfterLast('/'), color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(r.description, color = A.dim, fontSize = 13.sp, lineHeight = 18.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                        val need = r.headers.filter { it.required }
-                        if (need.isNotEmpty()) Text("Needs: " + need.joinToString { it.name }, color = A.accent, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
-                    }
-                    if (added) Text("Added", color = A.dim, fontSize = 13.sp, modifier = Modifier.padding(end = 8.dp))
-                    else PillButton("Connect", {
-                        if (r.headers.any { it.required }) pick = r else scope.launch {
-                            val s = McpServer(Ids.id(), r.name.substringAfterLast('/'), r.url)
-                            note = "Connecting ${s.name}..."
-                            note = vm.connectMcp(s).fold({ "${s.name} connected with $it tools." }, { "Could not connect ${s.name}: ${it.message}" })
-                        }
-                    }, primary = false, modifier = Modifier.testTag("mcp-connect"))
+            Row(Modifier.horizontalScroll(rememberScrollState()).padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                McpFeatured.CATEGORIES.forEach { c ->
+                    val sel = c == category
+                    Text(c, color = if (sel) A.onAccent else A.dim, fontSize = 13.sp,
+                        modifier = Modifier.testTag("mcp-cat-$c").clip(CircleShape).background(if (sel) A.accent else A.bubble).clickable { category = c }.padding(horizontal = 14.dp, vertical = 7.dp))
                 }
             }
-            item { if (searched && results.isEmpty() && !busy && error.isBlank()) Text("No remote server matched. Try other words.", color = A.dim, fontSize = 14.sp) }
+            if (error.isNotBlank()) Text(error, color = A.danger, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 8.dp))
+            if (note.isNotBlank()) Text(note, color = A.dim, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(vertical = 6.dp))
+        }
+        LazyColumn(Modifier.weight(1f).testTag("mcp-results"), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 8.dp, bottom = 40.dp)) {
+            if (featured.isNotEmpty()) {
+                item { Text("Featured", color = A.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(vertical = 6.dp)) }
+                items(featured, key = { it.name }) { card(it, "mcp-featured") }
+                item { Text("Servers that only offer a browser sign-in (Notion, Sentry, Vercel, Supabase, Figma, Canva ...) are not listed: Aura cannot sign in for you yet.", color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)) }
+            }
+            if (category == "All") {
+                item { Text("From the public MCP registry", color = A.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)) }
+                item { Text("Only servers you can reach over the internet are shown.", color = A.dim, fontSize = 12.sp, modifier = Modifier.padding(bottom = 6.dp)) }
+                items(results.filter { r -> featured.none { it.url == r.url } }, key = { "r:" + it.name }) { card(it, "mcp-result") }
+                item {
+                    if (searched && results.isEmpty() && !busy && error.isBlank()) Text("No remote server matched. Try other words.", color = A.dim, fontSize = 14.sp)
+                    if (next != null) PillButton("Load more", { search(more = true) }, primary = false, loading = busy, modifier = Modifier.padding(top = 8.dp).testTag("mcp-more"))
+                }
+            }
         }
     }
     pick?.let { r -> McpAddDialog(initial = r, onDismiss = { pick = null }) { s -> pick = null; scope.launch { note = vm.connectMcp(s).fold({ "${s.name} connected with $it tools." }, { "Could not connect ${s.name}: ${it.message}" }) } } }

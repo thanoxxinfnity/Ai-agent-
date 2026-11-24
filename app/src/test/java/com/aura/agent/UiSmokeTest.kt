@@ -15,6 +15,7 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 
 abstract class UiBase {
+    init { com.aura.agent.ui.LogoLoader.enabled = false }
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
 
     protected fun vm() = ViewModelProvider(rule.activity)[MainVM::class.java]
