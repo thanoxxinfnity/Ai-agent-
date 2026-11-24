@@ -75,6 +75,15 @@ class LoopGuardTest {
         assertTrue(r.last().content, r.last().isError && r.last().content.contains("$limit steps in a row failed"))
     }
 
+    @Test fun a_tool_that_keeps_failing_is_switched_off_for_the_rest_of_the_answer() {
+        val m = Mock().start(); val app = setup(m)
+        repeat(6) { i -> m.script += m.tool("github_read_file", "{\"repo\":\"r\",\"path\":\"gone$i.txt\"}") }
+        val t = tools(run(app))
+        assertFalse(t[3].content, t[3].content.contains("switched off"))
+        assertTrue(t[4].content, t[4].content.contains("switched off for this answer"))
+        assertEquals("the switched-off tool was not called for real again", 4, m.log.count { it.contains("/contents/gone") })
+    }
+
     @Test fun a_success_resets_the_failure_streak() {
         val m = Mock().start(); val app = setup(m)
         repeat(5) { i -> m.script += m.tool("github_read_file", "{\"repo\":\"r\",\"path\":\"missing$i.txt\"}") }

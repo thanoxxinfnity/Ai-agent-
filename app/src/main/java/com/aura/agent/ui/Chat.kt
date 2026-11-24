@@ -21,6 +21,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import com.aura.agent.data.fitsPrice
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -311,6 +313,15 @@ private fun MessageList(messages: List<MessageEntity>, vm: MainVM) {
         }
         map
     }
+    // copy and read-aloud buttons only under the final answer of a finished turn, not under every progress remark
+    val finalIds = remember(messages) {
+        val set = HashSet<String>()
+        messages.forEachIndexed { i, m ->
+            val next = messages.getOrNull(i + 1)
+            if (m.role == "assistant" && !m.isError && m.toolCalls == null && m.content.isNotBlank() && (next == null || next.role == "user")) set += m.id
+        }
+        set
+    }
     Box(Modifier.fillMaxSize()) {
     LazyColumn(
         state = state, reverseLayout = true, modifier = Modifier.fillMaxSize().testTag("messages"),
@@ -318,7 +329,7 @@ private fun MessageList(messages: List<MessageEntity>, vm: MainVM) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (running) item(key = "thinking") { Thinking(status) }
-        items(reversed, key = { it.id }) { m -> MessageItem(m, liveState, restoreFor[m.id]?.let { t -> cps[t] ?: 0 }, { restoreFor[m.id]?.let { t -> confirmTurn = t } }, voiceState, vm::shareFile, vm::saveFileToPhone, vm::openPreview, vm::openEditor) { vm.voice.speak(m.id, m.content) } }
+        items(reversed, key = { it.id }) { m -> MessageItem(m, liveState, restoreFor[m.id]?.let { t -> cps[t] ?: 0 }, { restoreFor[m.id]?.let { t -> confirmTurn = t } }, voiceState, vm::shareFile, vm::saveFileToPhone, vm::openPreview, vm::openEditor, showActions = !running && m.id in finalIds) { vm.voice.speak(m.id, m.content) } }
     }
     AnimatedVisibility(
         visible = !atBottom, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
@@ -343,14 +354,14 @@ private fun MessageList(messages: List<MessageEntity>, vm: MainVM) {
 }
 
 @Composable
-private fun MessageItem(m: MessageEntity, live: State<Map<String, String>>, restoreCount: Int?, onRestore: () -> Unit, voice: State<com.aura.agent.agent.VoiceState>, onShare: (Attachment) -> Unit, onSave: (Attachment) -> Unit, onPreview: (Attachment) -> Unit, onEdit: (Attachment) -> Unit, onSpeak: () -> Unit) {
+private fun MessageItem(m: MessageEntity, live: State<Map<String, String>>, restoreCount: Int?, onRestore: () -> Unit, voice: State<com.aura.agent.agent.VoiceState>, onShare: (Attachment) -> Unit, onSave: (Attachment) -> Unit, onPreview: (Attachment) -> Unit, onEdit: (Attachment) -> Unit, showActions: Boolean = true, onSpeak: () -> Unit) {
     when (m.role) {
         "user" -> UserBubble(m.content, remember(m.attachments) { Attachments.parse(m.attachments) })
         "assistant" -> {
             val streaming = live.value[m.id]
             val text = streaming ?: m.content
             if (text.isBlank()) return
-            if (m.isError) ErrorRow(text) else AssistantText(text, showActions = streaming == null, restoreCount = restoreCount, onRestore = onRestore, msgId = m.id, voice = voice, onSpeak = onSpeak)
+            if (m.isError) ErrorRow(text) else AssistantText(text, showActions = streaming == null && showActions, restoreCount = restoreCount, onRestore = onRestore, msgId = m.id, voice = voice, onSpeak = onSpeak)
         }
         "note" -> {}
         "switch" -> Text(m.content, color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp))
@@ -518,12 +529,20 @@ private fun Terminal(text: String, running: Boolean) {
 
 @Composable
 private fun Thinking(status: String) {
-    val t = rememberInfiniteTransition(label = "spin")
-    val angle by t.animateFloat(0f, 360f, infiniteRepeatable(tween(2400, easing = LinearEasing)), label = "a")
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        AIcon(R.drawable.ic_sparkle, tint = A.accent, size = 22.dp, modifier = Modifier.graphicsLayer { rotationZ = angle })
+    val t = rememberInfiniteTransition(label = "work")
+    val angle by t.animateFloat(0f, 360f, infiniteRepeatable(tween(3200, easing = LinearEasing)), label = "a")
+    val pulse by t.animateFloat(0.82f, 1.12f, infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "p")
+    val sweep by t.animateFloat(-1f, 2f, infiniteRepeatable(tween(1700, easing = LinearEasing)), label = "s")
+    // seconds since this step began, so a long step visibly keeps going
+    var secs by remember { mutableStateOf(0) }
+    LaunchedEffect(status) { secs = 0; while (true) { kotlinx.coroutines.delay(1000); secs++ } }
+    val dim = A.dim; val bright = A.text
+    val brush = Brush.linearGradient(listOf(dim, bright, dim), start = Offset(sweep * 300f, 0f), end = Offset(sweep * 300f + 260f, 40f))
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("working")) {
+        AIcon(R.drawable.ic_sparkle, tint = A.accent, size = 22.dp, modifier = Modifier.graphicsLayer { rotationZ = angle; scaleX = pulse; scaleY = pulse })
         Spacer(Modifier.width(10.dp))
-        Text(status.ifBlank { "Thinking" }, color = A.dim, fontSize = 15.sp)
+        Text(status.ifBlank { "Working" }, style = androidx.compose.ui.text.TextStyle(brush = brush, fontSize = 15.sp), maxLines = 2, modifier = Modifier.weight(1f, fill = false))
+        if (secs >= 5) Text("  ${secs}s", color = A.dim, fontSize = 12.sp)
     }
 }
 

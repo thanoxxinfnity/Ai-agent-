@@ -185,3 +185,17 @@ class DictationUiTest : UiBase() {
         vm().extras.setDictationEnhance(true)
     }
 }
+
+@org.junit.runner.RunWith(androidx.test.ext.junit.runners.AndroidJUnit4::class)
+@org.robolectric.annotation.Config(sdk = [34])
+class SpeechFallbackTest {
+    @org.junit.Test fun a_missing_offline_pack_falls_back_to_online_then_to_the_general_language() {
+        val e = com.aura.agent.agent.AndroidSpeechEngine(androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>())
+        org.junit.Assert.assertEquals(listOf("en-IN" to true, "en-IN" to false, "en-US" to false), e.attempts("en-IN"))
+        org.junit.Assert.assertEquals(listOf("en-US" to true, "en-US" to false), e.attempts("en-US"))
+        org.junit.Assert.assertEquals(listOf("hi-IN" to true, "hi-IN" to false), e.attempts("hi-IN"))
+        org.junit.Assert.assertTrue(com.aura.agent.agent.AndroidSpeechEngine.retriable(13)); org.junit.Assert.assertTrue(com.aura.agent.agent.AndroidSpeechEngine.retriable(12))
+        org.junit.Assert.assertFalse("silence is not a reason to retry", com.aura.agent.agent.AndroidSpeechEngine.retriable(android.speech.SpeechRecognizer.ERROR_NO_MATCH))
+        org.junit.Assert.assertFalse(com.aura.agent.agent.AndroidSpeechEngine.describe(13, "en-IN").contains("no offline speech pack"))
+    }
+}

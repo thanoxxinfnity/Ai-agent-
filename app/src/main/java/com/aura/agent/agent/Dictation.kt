@@ -45,10 +45,25 @@ class AndroidSpeechEngine(private val ctx: Context) : SpeechEngine {
     private val main = Handler(Looper.getMainLooper())
     private var recognizer: SpeechRecognizer? = null
 
-    override fun start(language: String, cb: SpeechEngine.Callback) {
+    /**
+     * Tries the offline model first (free, no internet), and when the phone has no pack for the language, or the offline model is not
+     * usable, it quietly asks the online recognizer instead, and finally the same language without the country (en-IN -> en-US).
+     * The user only sees an error when every try has failed.
+     */
+    override fun start(language: String, cb: SpeechEngine.Callback) { begin(language, cb, 0) }
+
+    internal fun attempts(language: String): List<Pair<String, Boolean>> {
+        val base = language.substringBefore('-').lowercase()
+        val general = when (base) { "en" -> "en-US"; "hi" -> "hi-IN"; else -> language }
+        return listOf(language to true, language to false, general to false).distinct()
+    }
+
+    private fun begin(language: String, cb: SpeechEngine.Callback, attempt: Int) {
         main.post {
             if (!SpeechRecognizer.isRecognitionAvailable(ctx)) { cb.onError("This phone has no speech recognition service. Install or enable the Google app."); return@post }
             runCatching { recognizer?.destroy() }
+            val tries = attempts(language)
+            val (lang, offline) = tries[attempt.coerceIn(0, tries.lastIndex)]
             val r = SpeechRecognizer.createSpeechRecognizer(ctx).also { recognizer = it }
             r.setRecognitionListener(object : RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) {}
@@ -59,13 +74,16 @@ class AndroidSpeechEngine(private val ctx: Context) : SpeechEngine {
                 override fun onEvent(eventType: Int, params: Bundle?) {}
                 override fun onPartialResults(partialResults: Bundle?) { partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { cb.onPartial(it) } }
                 override fun onResults(results: Bundle?) { cb.onFinal(results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()) }
-                override fun onError(error: Int) { cb.onError(describe(error, language)) }
+                override fun onError(error: Int) {
+                    // a missing language pack or an unusable offline model: try the next way instead of showing an error
+                    if (retriable(error) && attempt < tries.lastIndex) begin(language, cb, attempt + 1) else cb.onError(describe(error, language))
+                }
             })
             val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
                 .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                .putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
+                .putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
                 .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, offline)
                 .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
                 .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2200L)
                 .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
@@ -77,13 +95,15 @@ class AndroidSpeechEngine(private val ctx: Context) : SpeechEngine {
     override fun destroy() { main.post { runCatching { recognizer?.destroy() }; recognizer = null } }
 
     companion object {
+        /** errors that mean "this way does not work here" (language pack missing or unsupported, offline model unusable), not "you said nothing" */
+        fun retriable(code: Int) = code == 12 || code == 13 || code == SpeechRecognizer.ERROR_NETWORK || code == SpeechRecognizer.ERROR_SERVER || code == SpeechRecognizer.ERROR_CLIENT
         fun describe(code: Int, language: String): String = when (code) {
             SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "I did not hear anything. Tap the mic and try again."
             SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Aura needs the microphone permission. Allow it in the phone's app settings."
             SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "The speech service is busy. Wait a moment and try again."
             SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT, SpeechRecognizer.ERROR_SERVER ->
                 "Speech needs the internet unless the offline language pack is installed. Install it: phone Settings > Google > (Speech) > Offline speech recognition > $language."
-            12, 13 -> "This phone has no offline speech pack for $language yet. Install it in phone Settings > Google > Offline speech recognition, or connect to the internet."
+            12, 13 -> "Speech recognition for $language is not available on this phone right now. Check the internet connection, or install the offline language pack in phone Settings > Google > Offline speech recognition."
             SpeechRecognizer.ERROR_AUDIO -> "The microphone could not be used. Close other apps that use it and try again."
             else -> "Speech recognition stopped (code $code). Tap the mic and try again."
         }

@@ -299,6 +299,7 @@ class AgentRunner(private val app: App) {
         val toolCtx = mk(emit)
         val result = try {
             if (seen > 3) "ERROR: LOOP_DETECTED: you already made this exact call $seen times. Do something different or ask the user."
+            else if (c.name !in LOOP_EXEMPT && (mk {}.state.toolFails[c.name] ?: 0) >= TOOL_FAIL_LIMIT) "ERROR: ${Tools.label(c.name)} failed $TOOL_FAIL_LIMIT times in a row, so it is switched off for this answer. Do not call ${c.name} again: use another tool, or tell the user plainly what is blocking you."
             else if (c.name in ToolsPro.READ_ONLY && c.name !in LOOP_EXEMPT) {
                 // the same read-only call a moment ago: reuse its answer instead of asking the network again
                 val key = chatId + "|" + sig; val now = System.currentTimeMillis()
@@ -320,6 +321,7 @@ class AgentRunner(private val app: App) {
         // the same call giving the same result again and again means no progress
         val repeats = state.sameResult.merge(sig + "#" + result.hashCode(), 1, Int::plus)!!
         state.errorStreak = if (result.startsWith("ERROR")) state.errorStreak + 1 else 0
+        if (result.startsWith("ERROR") && !result.contains("switched off for this answer")) state.toolFails.merge(c.name, 1, Int::plus) else if (!result.startsWith("ERROR")) state.toolFails.remove(c.name)
         val shown = if (repeats >= 3) result + "\n\nLOOP_DETECTED: this exact call returned this exact result $repeats times. Stop repeating it: change the approach or tell the user what blocks you." else result
         dao.upsertMessage(placeholder.copy(content = shown.ifBlank { "(no output)" }, isError = bad, attachments = Attachments.toJson(toolCtx.produced.toList())))
         live.update { it - msgId }
@@ -496,6 +498,7 @@ class AgentRunner(private val app: App) {
 
     companion object {
         const val READ_REUSE_MS = 5_000L
+        const val TOOL_FAIL_LIMIT = 4
         val LOOP_EXEMPT = setOf("verify_project", "github_wait_run", "github_list_runs", "github_run_logs", "playwright_call", "agent_browser", "cloud_exec")
         const val HISTORY_LIMIT = 120
 

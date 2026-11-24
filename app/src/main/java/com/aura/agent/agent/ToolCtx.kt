@@ -15,6 +15,8 @@ class RunState {
     /** (call + result) -> how many times it happened: identical results mean no progress */
     val sameResult = java.util.concurrent.ConcurrentHashMap<String, Int>()
     @Volatile var errorStreak = 0
+    /** consecutive failures per tool: a tool that keeps failing is switched off for the rest of the turn */
+    val toolFails = java.util.concurrent.ConcurrentHashMap<String, Int>()
     @Volatile var ciFailures = 0
     @Volatile var deployFailures = 0
     /** the user already said yes (or no) to GitHub pushes during this run, so they are not asked again */
