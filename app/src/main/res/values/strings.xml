@@ -80,4 +80,5 @@
     <string name="show_original">Show what I said (original)</string>
     <string name="sec_dictation">Voice typing (microphone)</string>
     <string name="sec_images">Image generators</string>
+    <string name="sec_scheduled">Scheduled checks</string>
 </resources>

@@ -196,6 +196,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
             pending.value = emptyList()
             dao.upsertMessage(MessageEntity(Ids.id(), id, "user", t, Ids.now(), attachments = Attachments.toJson(atts)))
             dao.touch(id, Ids.now())
+            a.extras.resetChain(id)   // a real message from the user restarts the count of scheduled wake-ups
             runner.start(id)
             AgentService.start(app)
         }

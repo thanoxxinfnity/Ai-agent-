@@ -26,7 +26,7 @@ object Tools {
         putJsonArray("required") { add("path"); add("content") }
     }
 
-    val defs: List<ToolDef> by lazy { (baseDefs + ToolsPro.defs + ToolsVercel.defs + ToolsMemory.defs + ToolsLive.defs + ToolsMcp.defs + ToolsFolders.defs + ToolsVault.defs + ToolsFiles.defs).map(::relaxRepo) }
+    val defs: List<ToolDef> by lazy { (baseDefs + ToolsPro.defs + ToolsVercel.defs + ToolsMemory.defs + ToolsLive.defs + ToolsMcp.defs + ToolsFolders.defs + ToolsVault.defs + ToolsFiles.defs + ToolsSchedule.defs).map(::relaxRepo) }
 
     /** `repo` stops being required: it defaults to the repository chosen when the chat started. */
     private fun relaxRepo(t: ToolDef): ToolDef {
@@ -171,6 +171,7 @@ object Tools {
         if (name in ToolsLive.NAMES) return ToolsLive.run(ctx, name, a)
         if (name in ToolsMcp.NAMES) return ToolsMcp.run(ctx, name, a)
         if (name in ToolsFolders.NAMES) return ToolsFolders.run(ctx, name, a)
+        if (name in ToolsSchedule.NAMES) return if (ctx.readOnly) "ERROR: workers cannot schedule wake-ups." else ToolsSchedule.run(ctx, name, a)
         if (name in ToolsVault.NAMES) return ToolsVault.run(ctx, name, a)
         if (name in ToolsFiles.NAMES) return ToolsFiles.run(ctx, name, a)
         if (ctx.app.mcp.owns(name)) return ctx.app.mcp.call(ctx, name, a)
@@ -494,6 +495,8 @@ object Tools {
         "github_list_runs" -> "Checking workflow runs"
         "github_wait_run" -> "Waiting for build"
         "github_run_logs" -> "Reading build logs"
+        "schedule_check" -> "Scheduling a check"
+        "schedule_cancel" -> "Cancelling scheduled checks"
         "github_latest_release" -> "Looking up release"
         else -> name
     }

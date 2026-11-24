@@ -40,6 +40,8 @@ class AgentService : Service() {
         watcher = scope.launch {
             // after a process restart nothing is running yet: ask the runner to resume unfinished chats
             if (intent == null || intent.getBooleanExtra(EXTRA_RESUME, false)) withContext(Dispatchers.IO) { app.runner.resumeAll() }
+            // an alarm the agent set for itself rang: wake the chats whose check is due before watching for work
+            if (intent?.getBooleanExtra(EXTRA_SCHEDULED, false) == true) withContext(Dispatchers.IO) { runCatching { Scheduler.fireDue(app) } }
             var seen = app.runner.active.value.isNotEmpty()
             combine(app.runner.active, app.runner.status) { a, s -> a to s }.collect { (active, status) ->
                 if (active.isNotEmpty()) {
@@ -88,8 +90,9 @@ class AgentService : Service() {
         const val NOTIF_ID = 42
         const val ACTION_STOP = "com.aura.agent.STOP"
         const val EXTRA_RESUME = "resume"
-        fun start(ctx: Context, resume: Boolean = false) {
-            runCatching { ContextCompat.startForegroundService(ctx, Intent(ctx, AgentService::class.java).putExtra(EXTRA_RESUME, resume)) }
+        const val EXTRA_SCHEDULED = "scheduled"
+        fun start(ctx: Context, resume: Boolean = false, scheduled: Boolean = false) {
+            runCatching { ContextCompat.startForegroundService(ctx, Intent(ctx, AgentService::class.java).putExtra(EXTRA_RESUME, resume).putExtra(EXTRA_SCHEDULED, scheduled)) }
         }
     }
 }

@@ -76,4 +76,5 @@
     <string name="show_original">जो मैंने बोला वही दिखाएँ (असली)</string>
     <string name="sec_dictation">आवाज़ से टाइपिंग (माइक)</string>
     <string name="sec_images">इमेज जनरेटर</string>
+    <string name="sec_scheduled">तय किए गए चेक</string>
 </resources>

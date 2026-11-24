@@ -737,3 +737,26 @@ private fun ImageDialog(existing: com.aura.agent.data.ImageEndpoint?, onDismiss:
         dismissButton = { TextButton(onDismiss) { Text("Cancel", color = A.dim) } },
     )
 }
+
+// ------------------------------------------------------------------ scheduled checks
+
+/** The wake-ups the agent set for itself, so the user can see what will happen and cancel any of them. */
+@Composable
+fun ScheduledChecksSection(vm: MainVM) {
+    val list by vm.extras.scheduled.collectAsState()
+    val app = androidx.compose.ui.platform.LocalContext.current.applicationContext as com.aura.agent.App
+    Text("When a job takes a while, the AI can ask Aura to wake it up later and look again, so you do not have to type continue. Waiting checks are listed here. Each chat is limited to ${com.aura.agent.agent.ToolsSchedule.MAX_PER_CHAT} waiting checks, and the AI stops waking itself after ${com.aura.agent.agent.ToolsSchedule.MAX_CHAIN} times in a row until you write again.", color = A.dim, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(bottom = 10.dp, start = 2.dp))
+    if (list.isEmpty()) Text("Nothing is waiting.", color = A.dim, fontSize = 14.sp, modifier = Modifier.padding(start = 2.dp).testTag("sched-empty"))
+    val fmt = remember { java.text.SimpleDateFormat("EEE HH:mm", java.util.Locale.getDefault()) }
+    list.forEach { c ->
+        CardRow(Modifier.testTag("sched-row")) {
+            AIcon(R.drawable.ic_refresh, tint = A.accent, size = 20.dp)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("At " + fmt.format(java.util.Date(c.atMillis)), color = A.text, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Text(c.note, color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            }
+            IconButton({ vm.extras.removeScheduled(c.id); com.aura.agent.agent.Scheduler.arm(app) }, Modifier.testTag("sched-cancel")) { AIcon(R.drawable.ic_trash, tint = A.dim, size = 20.dp) }
+        }
+    }
+}

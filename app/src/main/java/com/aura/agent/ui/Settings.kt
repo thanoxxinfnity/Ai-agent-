@@ -442,6 +442,7 @@ fun SettingsScreen(vm: MainVM) {
             item { Section(stringResource(R.string.sec_vercel)) { VercelSection(vm) } }
             item { Section(stringResource(R.string.sec_free)) { FreeProvidersSection(vm) } }
             item { Section(stringResource(R.string.sec_images)) { ImageGeneratorsSection(vm) } }
+            item { Section(stringResource(R.string.sec_scheduled)) { ScheduledChecksSection(vm) } }
             item { Section(stringResource(R.string.sec_vault)) { VaultSection(vm) } }
             item { Section(stringResource(R.string.sec_mcp)) { McpEntry(vm) } }
             item { Section(stringResource(R.string.sec_folders)) { FoldersSection(vm) } }

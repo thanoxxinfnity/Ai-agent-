@@ -26,6 +26,10 @@ data class LocalFolder(
 @Serializable
 data class ImageEndpoint(val id: String, val name: String, val baseUrl: String, val key: String = "", val model: String = "")
 
+/** A moment the agent asked to be woken up at, to look at a chat again without the user typing "continue". */
+@Serializable
+data class ScheduledCheck(val id: String, val chatId: String, val atMillis: Long, val note: String)
+
 /** One API key in the hidden key box. The model only ever sees [name] and [baseUrl]; [key] is used by the app alone. */
 @Serializable
 data class VaultKey(
@@ -85,6 +89,21 @@ class Extras(ctx: Context) {
     fun setImageActive(id: String) { val v = if (id == POLLINATIONS || _images.value.any { it.id == id }) id else POLLINATIONS; _imageActive.value = v; prefs.edit().putString("imageActive", v).apply() }
     /** the endpoint chosen for pictures, or null when Pollinations is the choice */
     fun activeImage(): ImageEndpoint? = _images.value.firstOrNull { it.id == _imageActive.value }
+
+    // ---- scheduled checks (the agent wakes itself up later) ----
+    private val _sched = MutableStateFlow(runCatching { AppJson.decodeFromString<List<ScheduledCheck>>(prefs.getString("scheduled", "[]") ?: "[]") }.getOrDefault(emptyList()))
+    val scheduled: StateFlow<List<ScheduledCheck>> = _sched.asStateFlow()
+    private fun saveSched(l: List<ScheduledCheck>) { _sched.value = l; prefs.edit().putString("scheduled", AppJson.encodeToString(l)).apply() }
+    @Synchronized fun addScheduled(c: ScheduledCheck) = saveSched((_sched.value + c).sortedBy { it.atMillis })
+    @Synchronized fun removeScheduled(id: String) = saveSched(_sched.value.filterNot { it.id == id })
+    @Synchronized fun clearScheduledFor(chatId: String): Int { val n = _sched.value.count { it.chatId == chatId }; saveSched(_sched.value.filterNot { it.chatId == chatId }); return n }
+    /** takes the checks that are due out of the list and returns them */
+    @Synchronized fun takeDue(now: Long): List<ScheduledCheck> { val due = _sched.value.filter { it.atMillis <= now }; if (due.isNotEmpty()) saveSched(_sched.value - due.toSet()); return due }
+    /** how many scheduled wake-ups in a row a chat has had without the user writing: a limit stops endless self-waking */
+    private fun chains(): MutableMap<String, Int> = runCatching { AppJson.decodeFromString<Map<String, Int>>(prefs.getString("scheduleChain", "{}") ?: "{}") }.getOrDefault(emptyMap()).toMutableMap()
+    fun chainOf(chatId: String) = chains()[chatId] ?: 0
+    @Synchronized fun bumpChain(chatId: String) { val m = chains(); m[chatId] = (m[chatId] ?: 0) + 1; prefs.edit().putString("scheduleChain", AppJson.encodeToString(m.toMap())).apply() }
+    @Synchronized fun resetChain(chatId: String) { val m = chains(); if (m.remove(chatId) != null) prefs.edit().putString("scheduleChain", AppJson.encodeToString(m.toMap())).apply() }
 
     // ---- speaking style for read-aloud ----
     private val _vStyle = MutableStateFlow(prefs.getString("voiceStyle", "") ?: "")
