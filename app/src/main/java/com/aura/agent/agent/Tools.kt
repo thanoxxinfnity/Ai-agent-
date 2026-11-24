@@ -145,6 +145,7 @@ object Tools {
 
     suspend fun execute(ctx: ToolCtx, name: String, argsJson: String): String {
         val store = ctx.store
+        ctx.cloud.progress = { line -> ctx.emit(line + "\n") }   // codespace start-up shows what it is doing instead of a silent "Starting..."
         var a = runCatching { AppJsonLenient.parseToJsonElement(argsJson.ifBlank { "{}" }).o() }.getOrElse { return "ERROR: invalid JSON arguments" }
         if (ctx.activeRepo.isNotBlank() && a.s("repo").isNullOrBlank() &&
             (name in REPO_TOOLS || (name in setOf("search_code", "find_files", "read_lines") && a.s("scope") == "repo"))

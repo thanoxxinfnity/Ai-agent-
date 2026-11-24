@@ -118,7 +118,7 @@ class AgentRunner(private val app: App) {
                 stepNo++
                 val calls = generateWithRetry(chatId) { assistantId = it }
                 if (calls.isEmpty()) {
-                    if (needsVerify(state, mode)) {
+                    if (needsVerify(state, mode) && cloud.isOpen) {   // only when a codespace is already running: starting one just to check GitHub edits takes minutes
                         state.nudges++
                         dao.upsertMessage(MessageEntity(Ids.id(), chatId, "note", NUDGE, Ids.now()))
                         continue

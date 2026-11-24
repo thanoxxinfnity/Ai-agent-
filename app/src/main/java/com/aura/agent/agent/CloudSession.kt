@@ -33,6 +33,9 @@ class CloudSession(
 
     private val mutex = Mutex()
 
+    /** where progress lines go while the codespace starts (set by the tool that is running) */
+    @Volatile var progress: (String) -> Unit = {}
+
     private var failedAt = 0L
     private var failedWhy = ""
 
@@ -47,11 +50,11 @@ class CloudSession(
             val c = Codespaces(pat, api, portUrl, pollMs)
             cs = c
             val repo = c.ensureWorkspace(workspaceFiles())
-            val n = c.ensureRunning(repo)
+            val n = c.ensureRunning(repo, onStatus = progress)
             name = n
             store.activeCodespace = n   // lets the next app start stop it if this process dies
             val cl = c.client(n)
-            c.waitHealthy(cl)
+            c.waitHealthy(cl, onStatus = progress)
             client = cl
             failedAt = 0
             cl

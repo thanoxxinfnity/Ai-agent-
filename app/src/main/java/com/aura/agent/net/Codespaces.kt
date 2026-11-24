@@ -188,11 +188,13 @@ class Codespaces(
 
     private suspend fun state(name: String) = gh.call("GET", "/user/codespaces/$name").jsonObject["state"]?.jsonPrimitive?.contentOrNull.orEmpty()
 
-    private suspend fun waitFor(name: String, want: String, maxMs: Long) {
+    private suspend fun waitFor(name: String, want: String, maxMs: Long, onStatus: (String) -> Unit = {}) {
         var waited = 0L
+        var lastNote = -1L
         while (true) {
             val s = state(name)
             if (s == want) return
+            if (waited / 10_000 != lastNote) { lastNote = waited / 10_000; onStatus("Codespace is $s, waiting for $want (${waited / 1000}s so far; the first start can take a few minutes)") }
             if (s == "Failed" || s == "Deleted") throw LlmError("Codespace $name is $s")
             if (waited >= maxMs) throw LlmError("Codespace $name did not reach $want in time (state $s)")
             delay(pollMs); waited += pollMs
@@ -200,7 +202,7 @@ class Codespaces(
     }
 
     /** Equivalent of: gh codespace list, then start the stopped one or create a new one. Returns the codespace name. */
-    suspend fun ensureRunning(repoFull: String, maxMs: Long = 480_000): String {
+    suspend fun ensureRunning(repoFull: String, maxMs: Long = 480_000, onStatus: (String) -> Unit = {}): String {
         val list = (gh.call("GET", "/user/codespaces?per_page=100").jsonObject["codespaces"] as? JsonArray).orEmpty()
             .map { it.jsonObject }
             .filter { it["repository"]?.jsonObject?.get("full_name")?.jsonPrimitive?.contentOrNull.equals(repoFull, true) }
@@ -211,16 +213,17 @@ class Codespaces(
             when (cs["state"]!!.jsonPrimitive.content) {
                 "Available" -> {}
                 "Shutdown" -> gh.call("POST", "/user/codespaces/$name/start")
-                "ShuttingDown" -> { waitFor(name, "Shutdown", maxMs); gh.call("POST", "/user/codespaces/$name/start") }
+                "ShuttingDown" -> { waitFor(name, "Shutdown", maxMs, onStatus); gh.call("POST", "/user/codespaces/$name/start") }
             }
-            waitFor(name, "Available", maxMs)
+            waitFor(name, "Available", maxMs, onStatus)
             return name
         }
+        onStatus("Creating a new codespace (the very first time takes the longest)...")
         val created = gh.call("POST", "/repos/$repoFull/codespaces", buildJsonObject {
             put("display_name", "aura-workspace"); put("idle_timeout_minutes", 10)
         }).jsonObject
         val name = created["name"]!!.jsonPrimitive.content
-        waitFor(name, "Available", maxMs)
+        waitFor(name, "Available", maxMs, onStatus)
         return name
     }
 
@@ -231,9 +234,10 @@ class Codespaces(
 
     fun client(name: String) = CloudClient(portUrl(name, EXEC_PORT), pat)
 
-    suspend fun waitHealthy(c: CloudClient, maxMs: Long = 240_000) {
+    suspend fun waitHealthy(c: CloudClient, maxMs: Long = 240_000, onStatus: (String) -> Unit = {}) {
         var waited = 0L
         while (!c.health()) {
+            if (waited % 10_000 < pollMs) onStatus("Codespace is up, starting its command server (${waited / 1000}s)...")
             if (waited >= maxMs) throw LlmError("The codespace is running but its exec server did not answer. Check the port 8787 forwarding.")
             delay(pollMs); waited += pollMs
         }
