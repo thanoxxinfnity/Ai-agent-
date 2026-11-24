@@ -41,7 +41,9 @@ fun Field(
     label: String, value: String, onChange: (String) -> Unit, modifier: Modifier = Modifier,
     placeholder: String = "", secret: Boolean = false, singleLine: Boolean = true, minLines: Int = 1, mono: Boolean = false, tag: String? = null,
 ) {
-    var show by remember { mutableStateOf(false) }
+    // a masked multi-line box on a password keyboard cannot take a new line or a paste on many phones, so a long secret box starts visible
+    var show by remember { mutableStateOf(!singleLine) }
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     Column(modifier.fillMaxWidth()) {
         Text(label, color = A.dim, fontSize = 12.sp, modifier = Modifier.padding(bottom = 6.dp, start = 2.dp))
         Row(
@@ -56,11 +58,23 @@ fun Field(
                     textStyle = TextStyle(color = A.text, fontSize = 15.sp, fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default),
                     cursorBrush = SolidColor(A.accent),
                     visualTransformation = if (secret && !show) PasswordVisualTransformation() else VisualTransformation.None,
-                    keyboardOptions = KeyboardOptions(keyboardType = if (secret) KeyboardType.Password else KeyboardType.Text, autoCorrect = false),
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.None,
+                        keyboardType = if (secret && singleLine) KeyboardType.Password else KeyboardType.Text, autoCorrect = false,
+                        imeAction = if (singleLine) androidx.compose.ui.text.input.ImeAction.Default else androidx.compose.ui.text.input.ImeAction.None,
+                    ),
                 )
             }
             if (secret) IconBtn(if (show) R.drawable.ic_eye_off else R.drawable.ic_eye, { show = !show }, tint = A.dim, size = 38.dp)
         }
+        // a paste button that does not depend on the keyboard's own clipboard bar
+        if (!singleLine) Text(
+            "Paste from clipboard", color = A.accent, fontSize = 13.sp,
+            modifier = Modifier.padding(top = 4.dp, start = 2.dp).clip(RoundedCornerShape(8.dp)).clickable {
+                val t = clipboard.getText()?.text.orEmpty()
+                if (t.isNotEmpty()) onChange(if (value.isBlank()) t else value.trimEnd() + "\n" + t)
+            }.padding(horizontal = 6.dp, vertical = 6.dp).then(if (tag != null) Modifier.testTag("paste-$tag") else Modifier),
+        )
     }
 }
 
@@ -626,7 +640,7 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
     fun build() = Provider(
         id = existing?.id ?: Ids.id(), name = name.trim(), baseUrl = baseUrl.trim().trimEnd('/'), apiKey = apiKey.trim(), wire = wire,
         modelsUrl = modelsUrl.trim(),
-        headers = headers.lines().mapNotNull { l -> l.split(":", limit = 2).takeIf { it.size == 2 && it[0].isNotBlank() }?.let { it[0].trim() to it[1].trim() } }.toMap(),
+        headers = com.aura.agent.net.Llm.parseHeaders(headers),
         models = models, defaultModel = defaultModel.ifBlank { models.firstOrNull().orEmpty() },
         rpm = rpm.toIntOrNull()?.coerceIn(0, 100000) ?: 0, reasoning = reasoning, blocked = blockedMap, free = freeList.filter { it in models }, priced = priced, contexts = contextMap.filterKeys { it in models },
     )
@@ -667,7 +681,7 @@ fun ProviderEditor(vm: MainVM, route: Route.Provider) {
             item { Field("Requests per minute limit (optional)", rpm, { rpm = it.filter { c -> c.isDigit() }.take(5) }, placeholder = "empty = automatic (Gemini 10, NVIDIA 30)") }
             item {
                 Column {
-                    Field("Custom headers (one per line)", headers, { headers = it }, singleLine = false, minLines = 2, mono = true, placeholder = "User-Agent: my-app/1.0\nanthropic-version: 2023-06-01", tag = "headers-field")
+                    Field("Custom headers (one per line)", headers, { headers = it }, singleLine = false, minLines = 2, mono = true, placeholder = "User-Agent: my-app/1.0\nanthropic-version: 2023-06-01\n(or JSON: {\"User-Agent\": \"my-app/1.0\"})", tag = "headers-field")
                     Text("Sent with every request to this provider, on top of the usual ones, so a User-Agent or API version you set here wins. The API key header (Authorization, x-api-key, x-goog-api-key) can't be replaced while a key is set. Saved only on this phone.", color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 6.dp, start = 2.dp))
                     badHeader?.let { Text(it, color = A.danger, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp, start = 2.dp).testTag("headers-error")) }
                 }

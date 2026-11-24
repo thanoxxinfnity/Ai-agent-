@@ -147,6 +147,7 @@ fun ChatHost(vm: MainVM) {
     var newRepoFirst by remember { mutableStateOf(false) }
     var foldersSheet by remember { mutableStateOf(false) }
     var chatMenu by remember { mutableStateOf(false) }
+    var voiceDialog by remember { mutableStateOf(false) }
     val pending by vm.pending.collectAsState()
     val attachMsg by vm.attachMsg.collectAsState()
     val previewing by vm.previewFile.collectAsState()
@@ -207,6 +208,8 @@ fun ChatHost(vm: MainVM) {
                             onClick = { chatMenu = false; addRepoMode = true; newRepoFirst = false; repoPicker = true })
                         DropdownMenuItem(text = { Text(stringResource(R.string.new_repository)) }, leadingIcon = { AIcon(R.drawable.ic_plus, size = 18.dp) }, modifier = Modifier.testTag("menu-new-repo"),
                             onClick = { chatMenu = false; addRepoMode = true; newRepoFirst = true; repoPicker = true })
+                        DropdownMenuItem(text = { Text("Voice for this chat") }, leadingIcon = { AIcon(R.drawable.ic_speaker, size = 18.dp) }, modifier = Modifier.testTag("menu-voice"),
+                            onClick = { chatMenu = false; voiceDialog = true })
                         DropdownMenuItem(text = { Text(stringResource(R.string.phone_folders)) }, leadingIcon = { AIcon(R.drawable.ic_file, size = 18.dp) }, modifier = Modifier.testTag("menu-folders"),
                             onClick = { chatMenu = false; foldersSheet = true })
                         vm.repoList(chat).forEach { r ->
@@ -275,6 +278,7 @@ fun ChatHost(vm: MainVM) {
 
     if (repoPicker) RepoPicker(vm, attach = addRepoMode, createFirst = newRepoFirst, attached = vm.repoList(chat)) { repoPicker = false; addRepoMode = false; newRepoFirst = false }
     if (foldersSheet) FoldersSheet(vm) { foldersSheet = false }
+    if (voiceDialog) ChatVoiceDialog(vm) { voiceDialog = false }
     val priceFilter by vm.extras.priceFilter.collectAsState()
     if (picker) ModelPicker(
         providers = providers, activeProvider = activeProvider, activeModel = activeModel, auto = auto,
@@ -333,7 +337,7 @@ private fun MessageList(messages: List<MessageEntity>, vm: MainVM) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (running) item(key = "thinking") { Thinking(status) }
-        items(reversed, key = { it.id }) { m -> MessageItem(m, liveState, restoreFor[m.id]?.let { t -> cps[t] ?: 0 }, { restoreFor[m.id]?.let { t -> confirmTurn = t } }, voiceState, vm::shareFile, vm::saveFileToPhone, vm::openPreview, vm::openEditor, showActions = !running && m.id in finalIds) { vm.voice.speak(m.id, m.content) } }
+        items(reversed, key = { it.id }) { m -> MessageItem(m, liveState, restoreFor[m.id]?.let { t -> cps[t] ?: 0 }, { restoreFor[m.id]?.let { t -> confirmTurn = t } }, voiceState, vm::shareFile, vm::saveFileToPhone, vm::openPreview, vm::openEditor, showActions = !running && m.id in finalIds) { vm.speak(m.id, m.content) } }
     }
     AnimatedVisibility(
         visible = !atBottom, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),

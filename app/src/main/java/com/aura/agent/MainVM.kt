@@ -31,6 +31,11 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     val store = a.store
     val runner = a.runner
     val voice get() = a.voice
+    /** reads an answer aloud with the voice this chat has chosen (or the app voice) */
+    fun speak(id: String, text: String) {
+        (a.voice as? com.aura.agent.agent.VoiceEngine)?.voiceOverride = currentId.value?.let { a.extras.chatVoice(it) }?.takeIf { it.isNotBlank() }
+        a.voice.speak(id, text)
+    }
     private val dao = a.db.dao()
 
     val route = MutableStateFlow<Route>(Route.Chat)

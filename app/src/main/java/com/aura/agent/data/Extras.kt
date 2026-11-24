@@ -105,6 +105,16 @@ class Extras(ctx: Context) {
     @Synchronized fun bumpChain(chatId: String) { val m = chains(); m[chatId] = (m[chatId] ?: 0) + 1; prefs.edit().putString("scheduleChain", AppJson.encodeToString(m.toMap())).apply() }
     @Synchronized fun resetChain(chatId: String) { val m = chains(); if (m.remove(chatId) != null) prefs.edit().putString("scheduleChain", AppJson.encodeToString(m.toMap())).apply() }
 
+    // ---- a voice of its own for each chat ----
+    private val _chatVoices = MutableStateFlow(runCatching { AppJson.decodeFromString<Map<String, String>>(prefs.getString("chatVoices", "{}") ?: "{}") }.getOrDefault(emptyMap()))
+    val chatVoices: StateFlow<Map<String, String>> = _chatVoices.asStateFlow()
+    /** the Gemini voice chosen for this chat, or "" = the app's voice from Settings */
+    fun chatVoice(chatId: String): String = _chatVoices.value[chatId].orEmpty()
+    @Synchronized fun setChatVoice(chatId: String, voice: String) {
+        val m = _chatVoices.value.toMutableMap(); if (voice.isBlank()) m.remove(chatId) else m[chatId] = voice
+        _chatVoices.value = m; prefs.edit().putString("chatVoices", AppJson.encodeToString(m.toMap())).apply()
+    }
+
     // ---- speaking style for read-aloud ----
     private val _vStyle = MutableStateFlow(prefs.getString("voiceStyle", "") ?: "")
     /** an optional description of how answers should be read, e.g. "slowly, in a calm and friendly voice" */

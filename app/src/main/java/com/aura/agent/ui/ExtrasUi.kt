@@ -115,8 +115,7 @@ fun McpEntry(vm: MainVM) {
 }
 
 /** "Name: value" lines to a map, and back. Values here are secrets (tokens), shown only in a masked field. */
-internal fun parseHeaders(text: String): Map<String, String> =
-    text.lines().mapNotNull { l -> l.split(":", limit = 2).takeIf { it.size == 2 && it[0].isNotBlank() }?.let { it[0].trim() to it[1].trim() } }.toMap()
+internal fun parseHeaders(text: String): Map<String, String> = com.aura.agent.net.Llm.parseHeaders(text)
 
 @Composable
 fun McpScreen(vm: MainVM) {
@@ -210,7 +209,7 @@ fun McpAddDialog(initial: RegistryEntry?, onDismiss: () -> Unit, onSave: (McpSer
                 needed.forEach { h ->
                     Field(h.name + if (h.description.startsWith("Bearer ")) " (paste only your token, Aura adds Bearer)" else if (h.description.isNotBlank()) " (${h.description.take(60)})" else "", values[h.name].orEmpty(), { values[h.name] = it; err = "" }, secret = true, mono = true, tag = "mcp-secret-${h.name}")
                 }
-                Field("Other headers (optional, Name: value per line)", extra, { extra = it }, singleLine = false, minLines = 2, secret = true, mono = true, tag = "mcp-headers")
+                Field("Other headers (optional: Name: value per line, or JSON)", extra, { extra = it; err = "" }, singleLine = false, minLines = 2, secret = true, mono = true, tag = "mcp-headers")
                 if (err.isNotBlank()) Text(err, color = A.danger, fontSize = 13.sp)
             }
         },
@@ -219,6 +218,7 @@ fun McpAddDialog(initial: RegistryEntry?, onDismiss: () -> Unit, onSave: (McpSer
                 val u = url.trim()
                 when {
                     !(u.startsWith("https://") || u.startsWith("http://")) -> err = "The address must start with https://"
+                    com.aura.agent.net.Llm.headerProblem(extra) != null -> err = com.aura.agent.net.Llm.headerProblem(extra).orEmpty()
                     needed.any { values[it.name].isNullOrBlank() } -> err = "Fill in ${needed.first { values[it.name].isNullOrBlank() }.name}."
                     else -> onSave(McpServer(Ids.id(), name.trim().ifBlank { u.substringAfter("://").substringBefore('/') }, u, parseHeaders(extra) + needed.associate { h -> h.name to values[h.name].orEmpty().trim().let { v -> if (h.description.startsWith("Bearer ") && !v.contains(' ')) "Bearer $v" else v } }))
                 }
@@ -759,4 +759,46 @@ fun ScheduledChecksSection(vm: MainVM) {
             IconButton({ vm.extras.removeScheduled(c.id); com.aura.agent.agent.Scheduler.arm(app) }, Modifier.testTag("sched-cancel")) { AIcon(R.drawable.ic_trash, tint = A.dim, size = 20.dp) }
         }
     }
+}
+
+// ------------------------------------------------------------------ a voice for each chat
+
+/** Picks the voice that reads this chat's answers aloud. "App voice" follows Settings > Voice. */
+@Composable
+fun ChatVoiceDialog(vm: MainVM, onDismiss: () -> Unit) {
+    val chatId = vm.currentId.collectAsState().value
+    val all by vm.extras.chatVoices.collectAsState()
+    val current = chatId?.let { all[it] }.orEmpty()
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val hasKey = vm.store.voiceKey().isNotBlank()
+    var note by remember { mutableStateOf("") }
+    DisposableEffect(Unit) { onDispose { com.aura.agent.agent.VoiceSamples.stop() } }
+    AlertDialog(
+        onDismissRequest = onDismiss, containerColor = A.surface,
+        title = { Text("Voice for this chat", fontFamily = FontFamily.Serif) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (chatId == null) Text("Start the chat first (send a message), then pick its voice.", color = A.dim, fontSize = 13.sp)
+                else {
+                    Text(if (hasKey) "Answers in this chat are read with the voice you pick. Other chats keep their own." else "Natural voices need your Gemini key (Settings > Voice). Without it Aura reads with the phone's voice and this choice is kept for later.", color = A.dim, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(bottom = 6.dp))
+                    @Composable fun row(name: String, title: String, sub: String) {
+                        val sel = current == name
+                        Row(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(if (sel) A.bubble else Color.Transparent)
+                                .clickable { vm.extras.setChatVoice(chatId, name); note = "" }.padding(start = 12.dp, top = 2.dp, bottom = 2.dp, end = 2.dp).testTag("chatvoice-${name.ifBlank { "app" }}"),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) { Text(title, color = A.text, fontSize = 15.sp, fontWeight = FontWeight.Medium); Text(sub, color = A.dim, fontSize = 12.sp) }
+                            if (sel) AIcon(R.drawable.ic_check, tint = A.accent, size = 18.dp)
+                            if (name.isNotBlank()) IconBtn(R.drawable.ic_speaker, { vm.extras.setChatVoice(chatId, name); note = if (com.aura.agent.agent.VoiceSamples.play(ctx, name)) "" else "No sample recording for $name in this version. The voice is selected." }, tint = A.accent, size = 38.dp)
+                        }
+                    }
+                    row("", "App voice", "Whatever Settings > Voice says")
+                    com.aura.agent.net.GeminiTts.VOICES.forEach { v -> row(v.name, v.name, (if (v.female) "Female" else "Male") + ", " + v.style) }
+                    if (note.isNotBlank()) Text(note, color = A.dim, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                }
+            }
+        },
+        confirmButton = { TextButton(onDismiss, Modifier.testTag("chatvoice-done")) { Text("Done", color = A.accent) } },
+    )
 }

@@ -146,4 +146,17 @@ data: {"type":"message_start","message":{"usage":{"input_tokens":42}}}""",
         assertEquals(listOf("gemini-a"), Llm.listModels(prov("gemini", base("/v1beta"))))
         val r2 = s.takeRequest(); assertTrue(r2.path!!, r2.path!!.startsWith("/v1beta/models")); assertEquals(FAKE, r2.getHeader("x-goog-api-key"))
     }
+
+    @Test fun headers_are_accepted_as_lines_as_json_and_as_pasted_fragments() {
+        val lines = Llm.parseHeaders("User-Agent: my-app/1.0\n  X-Two :  2  \n\n")
+        assertEquals(mapOf("User-Agent" to "my-app/1.0", "X-Two" to "2"), lines)
+        assertEquals(mapOf("User-Agent" to "my-app/1.0", "X-N" to "5"), Llm.parseHeaders("""{"User-Agent": "my-app/1.0", "X-N": 5}"""))
+        assertEquals("curly quotes from a phone keyboard are straightened", mapOf("A" to "b"), Llm.parseHeaders("{\u201CA\u201D: \u201Cb\u201D}"))
+        assertEquals("lines copied out of JSON", mapOf("A" to "b", "C" to "d"), Llm.parseHeaders("{\n  \"A\": \"b\",\n  \"C\": \"d\"\n}"))
+        assertEquals("curl style", mapOf("X-Key" to "v1"), Llm.parseHeaders("-H 'X-Key: v1'"))
+        assertNull(Llm.headerProblem("""{"A": "b"}""")); assertNull(Llm.headerProblem(""))
+        assertTrue(Llm.headerProblem("{broken json")!!.contains("JSON")); assertTrue(Llm.headerProblem("""{"A": {"x": 1}}""")!!.contains("text or a number"))
+        assertNotNull(Llm.headerProblem("""{"Bad Name": "v"}""")); assertNotNull(Llm.headerProblem("no colon"))
+        assertEquals("bad input gives no headers rather than half of them", emptyMap<String, String>(), Llm.parseHeaders("A: b\nbroken line"))
+    }
 }

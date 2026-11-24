@@ -158,6 +158,22 @@ class VoiceEngineTest {
         assertEquals("", v.error.value)
     }
 
+    @Test fun a_chat_can_have_its_own_voice_used_once_and_an_unknown_one_falls_back() {
+        val (app, s, log) = env()
+        app.store.setVoiceKey("AQ.test-key-value"); app.store.setVoiceName("Kore")
+        val v = VoiceEngine(app, app.store, FakeSink(), { s.url("/v1beta").toString().trimEnd('/') }, FakePhone(app))
+        v.voiceOverride = "Fenrir"; v.speak("m1", "Hello there my friend."); waitIdle(v)
+        assertTrue(log.first().body.readUtf8().contains("\"voiceName\":\"Fenrir\""))
+        log.clear(); v.speak("m2", "Another one here."); waitIdle(v)   // the override was used up
+        assertTrue(log.first().body.readUtf8().contains("\"voiceName\":\"Kore\""))
+        log.clear(); v.voiceOverride = "NotAVoice"; v.speak("m3", "Third one here."); waitIdle(v)
+        assertTrue(log.first().body.readUtf8().contains("\"voiceName\":\"Kore\""))
+        app.extras.setChatVoice("chat-a", "Puck"); app.extras.setChatVoice("chat-b", "Aoede")
+        assertEquals("Puck", app.extras.chatVoice("chat-a")); assertEquals("Aoede", app.extras.chatVoice("chat-b")); assertEquals("", app.extras.chatVoice("chat-c"))
+        app.extras.setChatVoice("chat-a", ""); assertEquals("", app.extras.chatVoice("chat-a")); assertEquals("Aoede", app.extras.chatVoice("chat-b"))
+        app.extras.setChatVoice("chat-b", "")
+    }
+
     @Test fun the_users_speaking_style_goes_in_front_of_every_piece_and_nothing_extra_without_one() {
         val (app, s, log) = env()
         app.store.setVoiceKey("AQ.test-key-value"); app.store.setVoiceName("Kore")
@@ -285,5 +301,28 @@ class VoiceSampleUiTest : UiBase() {
         rule.onNodeWithTag("voice-style").performTextInput("slowly and calmly"); rule.waitForIdle()
         assertEquals("slowly and calmly", vm().extras.voiceStyle.value)
         vm().extras.setVoiceStyle("")
+    }
+}
+
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [34])
+class ChatVoiceUiTest : UiBase() {
+    @Test fun each_chat_picks_its_own_voice_from_the_chat_menu() {
+        rule.onNodeWithText("Skip for now").performClick(); rule.waitForIdle()
+        val app = rule.activity.application as App
+        runBlocking { app.db.dao().upsertChat(ChatEntity("cv1", "One", Ids.now(), Ids.now())); app.db.dao().upsertChat(ChatEntity("cv2", "Two", Ids.now(), Ids.now())) }
+        val click = { n: SemanticsNodeInteraction -> n.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }; rule.waitForIdle() }
+        rule.runOnUiThread { vm().openChat("cv1") }; rule.waitForIdle()
+        click(rule.onNodeWithTag("chat-menu")); click(rule.onNodeWithTag("menu-voice"))
+        assertTrue(text("Voice for this chat"))
+        rule.onNodeWithTag("chatvoice-Fenrir").performScrollTo(); click(rule.onNodeWithTag("chatvoice-Fenrir"))
+        assertEquals("Fenrir", vm().extras.chatVoice("cv1")); assertEquals("", vm().extras.chatVoice("cv2"))
+        click(rule.onNodeWithTag("chatvoice-done"))
+        rule.runOnUiThread { vm().openChat("cv2") }; rule.waitForIdle()
+        click(rule.onNodeWithTag("chat-menu")); click(rule.onNodeWithTag("menu-voice"))
+        rule.onNodeWithTag("chatvoice-Aoede").performScrollTo(); click(rule.onNodeWithTag("chatvoice-Aoede"))
+        assertEquals("Aoede", vm().extras.chatVoice("cv2")); assertEquals("Fenrir", vm().extras.chatVoice("cv1"))
+        click(rule.onNodeWithTag("chatvoice-app")); assertEquals("", vm().extras.chatVoice("cv2"))
+        vm().extras.setChatVoice("cv1", "")
     }
 }

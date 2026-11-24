@@ -130,18 +130,54 @@ object Llm {
         return this
     }
 
-    /** What is wrong with the custom-header text (one "Name: value" per line), or null. Checked in the editor so a bad line never reaches a request. */
-    fun headerProblem(text: String): String? {
-        text.lines().forEachIndexed { i, raw ->
-            val l = raw.trim(); if (l.isEmpty()) return@forEachIndexed
-            val parts = l.split(":", limit = 2)
-            if (parts.size < 2 || parts[0].isBlank()) return "Line ${i + 1}: write it as  Name: value"
-            val name = parts[0].trim(); val value = parts[1].trim()
-            if (!Regex("[!#$%&'*+.^_`|~0-9A-Za-z-]+").matches(name)) return "Line ${i + 1}: \"${name.take(30)}\" is not a valid header name (letters, digits and - only)"
-            if (value.any { it.code < 32 && it != '\t' || it.code > 126 }) return "Line ${i + 1}: the value has a character headers cannot carry (use plain English letters and digits)"
+    private fun straighten(t: String) = t.replace('\u201C', '"').replace('\u201D', '"').replace('\u2018', '\'').replace('\u2019', '\'').replace('\u00A0', ' ')
+    private val NAME_OK = Regex("[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+    private fun valueOk(v: String) = v.none { it.code < 32 && it != '\t' || it.code > 126 }
+
+    /**
+     * Custom headers typed or pasted in any of the usual shapes: one "Name: value" per line, a JSON object {"Name": "value"},
+     * lines copied out of JSON ("Name": "value",) or out of curl (-H 'Name: value'). Phone keyboards' curly quotes are straightened.
+     * Returns the headers and, when something cannot be used, what is wrong.
+     */
+    class HeaderParse(val headers: Map<String, String>, val problem: String?)
+
+    fun parseHeaderText(text: String): HeaderParse {
+        val t = straighten(text).trim()
+        if (t.isEmpty()) return HeaderParse(emptyMap(), null)
+        val out = LinkedHashMap<String, String>()
+        if (t.startsWith("{")) {
+            val obj = runCatching { AppJsonLenient.parseToJsonElement(t) as? JsonObject }.getOrNull()
+                ?: return HeaderParse(emptyMap(), "That JSON could not be read. Write it like  {\"User-Agent\": \"my-app/1.0\"}  or one  Name: value  per line.")
+            for ((k, v) in obj) {
+                val value = (v as? JsonPrimitive)?.contentOrNull ?: return HeaderParse(emptyMap(), "\"${k.take(30)}\": the value must be text or a number")
+                val bad = checkPair(k.trim(), value.trim(), "\"${k.take(30)}\""); if (bad != null) return HeaderParse(emptyMap(), bad)
+                out[k.trim()] = value.trim()
+            }
+            return HeaderParse(out, null)
         }
-        return null
+        t.lines().forEachIndexed { i, raw ->
+            var l = raw.trim().trimEnd(',').trim(); if (l.isEmpty() || l == "{" || l == "}") return@forEachIndexed
+            if (l.startsWith("-H ") || l.startsWith("--header ")) l = l.substringAfter(' ').trim().trim('\'', '"')
+            val parts = l.split(":", limit = 2)
+            if (parts.size < 2 || parts[0].isBlank()) return HeaderParse(emptyMap(), "Line ${i + 1}: write it as  Name: value")
+            val name = parts[0].trim().trim('"', '\'').trim(); val value = parts[1].trim().trim('"', '\'').trim()
+            val bad = checkPair(name, value, "Line ${i + 1}"); if (bad != null) return HeaderParse(emptyMap(), bad)
+            out[name] = value
+        }
+        return HeaderParse(out, null)
     }
+
+    private fun checkPair(name: String, value: String, where: String): String? = when {
+        !NAME_OK.matches(name) -> "$where: \"${name.take(30)}\" is not a valid header name (letters, digits and - only)"
+        !valueOk(value) -> "$where: the value has a character headers cannot carry (use plain English letters and digits)"
+        else -> null
+    }
+
+    /** What is wrong with the custom-header text, or null. Checked in the editor so a bad line never reaches a request. */
+    fun headerProblem(text: String): String? = parseHeaderText(text).problem
+
+    /** The headers in the text (lines or JSON); lines that cannot be used are left out. */
+    fun parseHeaders(text: String): Map<String, String> = parseHeaderText(text).headers
 
     private fun JsonElement?.str(): String? = (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull
 

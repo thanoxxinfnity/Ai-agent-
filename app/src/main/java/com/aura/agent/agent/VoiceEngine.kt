@@ -66,6 +66,8 @@ class VoiceEngine(
     private var job: Job? = null
     override val state = MutableStateFlow(VoiceState())
     override val error = MutableStateFlow("")
+    /** the voice for the next answer when its chat has one of its own (used once, then cleared) */
+    @Volatile var voiceOverride: String? = null
 
     override fun stop() {
         job?.cancel(); job = null
@@ -74,6 +76,7 @@ class VoiceEngine(
     }
 
     override fun speak(id: String, text: String) {
+        val chosen = voiceOverride; voiceOverride = null
         val wasThis = state.value.id == id
         stop()
         if (wasThis) return   // tapping the same speaker again stops it
@@ -85,7 +88,7 @@ class VoiceEngine(
             try {
                 val key = store.voiceKey()
                 if (key.isBlank()) { speakOnPhone(id, clean); return@launch }
-                val voice = store.voiceName()
+                val voice = chosen?.takeIf { v -> com.aura.agent.net.GeminiTts.VOICES.any { it.name == v } } ?: store.voiceName()
                 val chunks = SpeechText.chunks(clean)
                 coroutineScope {
                     // fetch the next piece while the current one plays

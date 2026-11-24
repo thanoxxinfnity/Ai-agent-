@@ -33,4 +33,31 @@ class ProviderFormatUiTest : UiBase() {
         val p = st.providers.value.first { it.id == "F" }
         assertEquals("anthropic", p.wire); assertEquals("my-app/1.0", p.headers["User-Agent"]); assertEquals("2023-06-01", p.headers["anthropic-version"])
     }
+
+    @Test fun the_headers_box_has_a_paste_button_that_adds_the_clipboard_text() {
+        rule.onNodeWithText("Skip for now").performClick(); rule.waitForIdle()
+        vm().store.upsertProvider(Provider("G", "Paste", "https://api.example.com/v1", "fake-test-key-not-real-0006", models = listOf("m1"), defaultModel = "m1"))
+        rule.runOnUiThread { vm().go(Route.Provider("G")) }; rule.waitForIdle()
+        rule.runOnUiThread {
+            val cm = rule.activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("h", "User-Agent: my-app/2.0"))
+        }
+        rule.onNodeWithTag("editor-list").performScrollToNode(hasTestTag("headers-field")); rule.waitForIdle()
+        rule.onNodeWithTag("headers-field").performTextInput("X-One: 1")
+        click(rule.onNodeWithTag("paste-headers-field", useUnmergedTree = true))
+        rule.onNodeWithTag("editor-list").performScrollToNode(hasTestTag("save-provider")); click(rule.onNodeWithTag("save-provider"))
+        val h = vm().store.providers.value.first { it.id == "G" }.headers
+        assertEquals("1", h["X-One"]); assertEquals("my-app/2.0", h["User-Agent"])
+    }
+
+    @Test fun json_headers_can_be_typed_and_are_saved_as_headers() {
+        rule.onNodeWithText("Skip for now").performClick(); rule.waitForIdle()
+        vm().store.upsertProvider(Provider("J", "Json", "https://api.example.com/v1", "fake-test-key-not-real-0007", models = listOf("m1"), defaultModel = "m1"))
+        rule.runOnUiThread { vm().go(Route.Provider("J")) }; rule.waitForIdle()
+        rule.onNodeWithTag("editor-list").performScrollToNode(hasTestTag("headers-field")); rule.waitForIdle()
+        rule.onNodeWithTag("headers-field").performTextInput("{\"User-Agent\": \"my-app/3.0\", \"X-Team\": \"blue\"}")
+        rule.onAllNodesWithTag("headers-error").assertCountEquals(0)
+        rule.onNodeWithTag("editor-list").performScrollToNode(hasTestTag("save-provider")); click(rule.onNodeWithTag("save-provider"))
+        assertEquals(mapOf("User-Agent" to "my-app/3.0", "X-Team" to "blue"), vm().store.providers.value.first { it.id == "J" }.headers)
+    }
 }
