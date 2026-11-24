@@ -300,6 +300,10 @@ private fun MessageList(messages: List<MessageEntity>, vm: MainVM) {
     // sending a message brings the list back to the newest message, then the user can scroll freely again
     val lastUserId = messages.lastOrNull { it.role == "user" }?.id
     LaunchedEffect(lastUserId) { if (lastUserId != null) state.animateScrollToItem(0) }
+    // a reader who is at the bottom stays at the bottom when a newer message (an answer, a tool step) arrives instead of being left one item up
+    val stuckToBottom = rememberUpdatedState(atBottom)
+    val newestId = messages.lastOrNull()?.id
+    LaunchedEffect(newestId) { if (newestId != null && stuckToBottom.value) state.scrollToItem(0) }
     val cps by vm.checkpointTurns.collectAsState()
     var confirmTurn by remember { mutableStateOf<String?>(null) }
     // the final answer of each turn that changed something gets a "Restore checkpoint" button

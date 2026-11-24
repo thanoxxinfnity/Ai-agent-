@@ -388,6 +388,8 @@ class ScrollUiTest : UiBase() {
         val end2 = System.currentTimeMillis() + 25000
         while (System.currentTimeMillis() < end2 && !text("my new message at the end")) { Thread.sleep(50); rule.waitForIdle() }
         assertTrue("sent message is visible at the end", text("my new message at the end"))
+        val end3 = System.currentTimeMillis() + 15000   // the list scrolls to the end with an animation: give it time under load
+        while (System.currentTimeMillis() < end3 && rule.onAllNodesWithTag("scroll-down").fetchSemanticsNodes().isNotEmpty()) { Thread.sleep(50); rule.waitForIdle() }
         assertTrue(rule.onAllNodesWithTag("scroll-down").fetchSemanticsNodes().isEmpty())
     }
 }
