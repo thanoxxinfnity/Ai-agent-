@@ -618,13 +618,13 @@ private fun Composer(
                 }
                 Spacer(Modifier.width(4.dp))
                 Row(
-                    Modifier.clip(CircleShape).border(1.dp, A.border, CircleShape).clickable(onClick = onModel)
+                    Modifier.weight(1f, fill = false).clip(CircleShape).border(1.dp, A.border, CircleShape).clickable(onClick = onModel)
                         .padding(start = 10.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     AIcon(R.drawable.ic_chip, tint = A.dim, size = 16.dp)
                     Spacer(Modifier.width(6.dp))
-                    Text(modelLabel, color = A.dim, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 96.dp))
+                    Text(modelLabel, color = A.dim, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                     Spacer(Modifier.width(2.dp))
                     AIcon(R.drawable.ic_chevron_down, tint = A.dim, size = 14.dp)
                 }
@@ -654,13 +654,14 @@ private fun Composer(
                         }
                     }
                 }
-                Spacer(Modifier.weight(1f))
+                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.weight(0.01f))
                 IconBtn(R.drawable.ic_mic, onMic, tint = if (micState == com.aura.agent.agent.DictationState.Listening) A.onAccent else if (micState == com.aura.agent.agent.DictationState.Polishing) A.accent else A.dim, size = 40.dp,
-                    bg = if (micState == com.aura.agent.agent.DictationState.Listening) A.accent else androidx.compose.ui.graphics.Color.Transparent, modifier = Modifier.testTag("mic"))
+                    bg = if (micState == com.aura.agent.agent.DictationState.Listening) A.accent else androidx.compose.ui.graphics.Color.Transparent, modifier = Modifier.requiredSize(40.dp).testTag("mic"))
                 Spacer(Modifier.width(4.dp))
                 val ready = running || value.isNotBlank() || attachments.isNotEmpty()
                 Box(
-                    Modifier.size(40.dp).testTag("send").clip(CircleShape)
+                    Modifier.requiredSize(40.dp).testTag("send").clip(CircleShape)
                         .background(if (running) A.text else if (ready) A.accent else A.border)
                         .clickable(enabled = ready) { if (running) onStop() else onSend() },
                     contentAlignment = Alignment.Center,
