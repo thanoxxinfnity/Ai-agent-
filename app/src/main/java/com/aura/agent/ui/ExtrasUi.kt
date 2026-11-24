@@ -135,20 +135,32 @@ fun McpScreen(vm: MainVM) {
             }
             items(servers, key = { it.id }) { s ->
                 val st = status[s.id]
-                CardRow(Modifier.testTag("mcp-row")) {
+                var open by remember(s.id) { mutableStateOf(false) }
+                val connected = st is McpStatus.Connected && s.enabled
+                CardRow(Modifier.testTag("mcp-row").clickable(enabled = connected) { open = !open }) {
+                    ServerLogo(RegistryEntry(s.name, "", "", s.url, emptyList(), ""))
+                    Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(s.name, color = A.text, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(s.url, color = A.dim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
                             when {
                                 !s.enabled -> "Disconnected"
-                                st is McpStatus.Connected -> "Connected - ${st.tools} tools"
+                                st is McpStatus.Connected -> "Connected - ${st.tools} tools" + if (open) "" else "  (tap to see them)"
                                 st is McpStatus.Failed -> st.reason
                                 st is McpStatus.Connecting -> "Connecting..."
                                 else -> "Will connect when you chat"
                             },
                             color = if (st is McpStatus.Failed && s.enabled) A.danger else A.dim, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 2.dp),
                         )
+                        if (open && connected) Column(Modifier.padding(top = 8.dp).testTag("mcp-tools"), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            vm.mcp.toolInfo(s.id).forEach { (n, d) ->
+                                Column {
+                                    Text(n, color = A.text, fontSize = 13.sp, fontWeight = FontWeight.Medium, fontFamily = FontFamily.Monospace)
+                                    if (d.isNotBlank()) Text(d.replace(Regex("\\s+"), " "), color = A.dim, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
                     }
                     if (st is McpStatus.Connecting) CircularProgressIndicator(Modifier.size(22.dp).padding(end = 6.dp), color = A.accent, strokeWidth = 2.dp)
                     else AuraSwitch(s.enabled && st !is McpStatus.Failed, "mcp-switch") { want ->

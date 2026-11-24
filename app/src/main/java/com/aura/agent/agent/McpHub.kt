@@ -81,6 +81,8 @@ class McpHub(private val extras: Extras) {
 
     fun connectedCount() = conns.size
     fun toolNames(id: String): List<String> = conns[id]?.tools?.map { it.name }.orEmpty()
+    /** name and description of each tool a connected server offers (what the Tools list on the MCP screen shows) */
+    fun toolInfo(id: String): List<Pair<String, String>> = conns[id]?.tools?.map { it.name to it.description }.orEmpty()
 
     /** Tool definitions for every connected server. */
     fun defs(): List<ToolDef> = names.map { (n, p) ->

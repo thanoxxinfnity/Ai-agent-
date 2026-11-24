@@ -112,6 +112,9 @@ class ExtrasUiTest : UiBase() {
         assertTrue("connects", waitFor { text("Connected - 3 tools") })
         val s = ex.mcpServers.value.single(); assertEquals("Demo", s.name); assertEquals("FAKE-KEY-123", s.headers["X-Api-Key"])
         assertEquals("the header reached the server", "FAKE-KEY-123", mcp.seen.first().getHeader("X-Api-Key"))
+        rule.onNodeWithTag("mcp-row").performClick(); rule.waitForIdle()   // tap the row: the server's tools are listed
+        assertTrue("tools shown", waitFor { text("Echo the text back") && text("Add two numbers") && text("Always fails") })
+        rule.onNodeWithTag("mcp-row").performClick(); rule.waitForIdle()
         toggle(rule.onNodeWithTag("mcp-switch").assertIsOn())
         assertTrue(waitFor { text("Disconnected") }); assertFalse(ex.mcpServers.value.single().enabled); assertTrue(hub.defs().isEmpty())
         toggle(rule.onNodeWithTag("mcp-switch"))
