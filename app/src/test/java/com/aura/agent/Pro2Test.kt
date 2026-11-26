@@ -304,3 +304,27 @@ class RepoPickerUiTest : UiBase() {
         assertEquals("octo/fresh", vm().pendingRepo.value)
     }
 }
+
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [34])
+class GithubExpiredUiTest : UiBase() {
+    @Test fun a_rejected_login_is_forgotten_and_the_picker_offers_to_sign_in_again() {
+        val s = MockWebServer()
+        s.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+            override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): MockResponse = MockResponse().setResponseCode(401).setBody("{\"message\":\"Bad credentials\"}")
+        }
+        s.start()
+        val app = rule.activity.application as App
+        app.cloudApi = s.url("/").toString().trimEnd('/')
+        app.store.setGithub("tok_value_old", "octo")
+        rule.waitForIdle()
+        assertTrue("chip", text("Choose repository"))
+        rule.onNodeWithText("Choose repository").performClick()
+        val until = System.currentTimeMillis() + 15000
+        while (System.currentTimeMillis() < until && rule.onAllNodesWithTag("github-expired", useUnmergedTree = true).fetchSemanticsNodes().isEmpty()) { org.robolectric.shadows.ShadowLooper.idleMainLooper(); Thread.sleep(100) }
+        assertTrue("sign-in-again box", text("no longer accepts your login") && text("Sign in with GitHub again"))
+        assertEquals("the dead token is forgotten, the name is kept", "", app.store.githubToken.value)
+        assertEquals("octo", app.store.githubUser.value)
+        s.shutdown()
+    }
+}

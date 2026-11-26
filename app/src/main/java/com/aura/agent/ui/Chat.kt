@@ -828,6 +828,10 @@ private fun RepoPicker(vm: MainVM, attach: Boolean = false, createFirst: Boolean
                     }
                     if (state == "loading") Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.size(16.dp), color = A.accent, strokeWidth = 2.dp); Spacer(Modifier.width(10.dp)); Text("Loading repositories", color = A.dim, fontSize = 14.sp)
+                    } else if (state == MainVM.GITHUB_EXPIRED) Column(Modifier.padding(12.dp).testTag("github-expired")) {
+                        Text("GitHub no longer accepts your login (it was revoked, or replaced by a newer sign-in). Sign in again and your repositories will load.", color = A.danger, fontSize = 13.sp, lineHeight = 18.sp)
+                        Spacer(Modifier.height(10.dp))
+                        PillButton("Sign in with GitHub again", { vm.startGithubLogin(); onDismiss(); vm.go(Route.Settings) }, modifier = Modifier.testTag("github-resignin"))
                     } else if (state.isNotBlank()) Text(state, color = A.danger, fontSize = 13.sp, modifier = Modifier.padding(12.dp))
                 }
                 items(repos.filter { q.isBlank() || it.full.contains(q, true) }, key = { it.full }) { r ->

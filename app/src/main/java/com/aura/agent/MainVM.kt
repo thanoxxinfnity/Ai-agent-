@@ -83,6 +83,8 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     val repos = MutableStateFlow<List<RepoInfo>>(emptyList())
     val reposState = MutableStateFlow("")   // "", "loading", or an error message
 
+    companion object { const val GITHUB_EXPIRED = "GITHUB_EXPIRED" }
+
     fun loadRepos(force: Boolean = false) {
         val token = store.githubToken.value
         if (token.isBlank()) { reposState.value = "Sign in with GitHub to pick a repository."; return }
@@ -105,6 +107,12 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
                     if (arr.size < 100) break
                 }
                 repos.value = all; reposState.value = ""
+            } catch (e: com.aura.agent.net.GhError) {
+                if (e.code == 401) {
+                    // GitHub no longer accepts this login (revoked, or replaced by newer sign-ins: an app keeps only its 10 newest tokens). Forget it so the app asks to sign in again.
+                    store.setGithub("", store.githubUser.value)
+                    reposState.value = GITHUB_EXPIRED
+                } else reposState.value = e.message ?: "Could not load repositories"
             } catch (e: Exception) {
                 reposState.value = e.message ?: "Could not load repositories"
             }
@@ -242,6 +250,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
                 val user = GitHub(token).login()
                 store.setGithub(token, user)
                 loginMsg.value = ""
+                if (reposState.value == GITHUB_EXPIRED) { reposState.value = ""; loadRepos(force = true) }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
